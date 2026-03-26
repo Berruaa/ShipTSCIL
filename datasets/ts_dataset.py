@@ -53,4 +53,5 @@ class TimeSeriesDataset(Dataset):
         seq_len = x.shape[-1]
         input_mask = torch.ones(seq_len, dtype=torch.long)
 
-        return x, input_mask, self.labels[idx]
+        y = self.labels[idx]
+        return x, input_mask, y
