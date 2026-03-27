@@ -1,7 +1,7 @@
 import torch.nn as nn
 
 
-class MomentClassifier(nn.Module):
+class MomentModel(nn.Module):
     def __init__(self, encoder, head):
         super().__init__()
         self.encoder = encoder

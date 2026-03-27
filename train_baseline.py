@@ -6,9 +6,9 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report, confusion_matrix
 
 from datasets.ts_dataset import TimeSeriesDataset
-from models.moment_encoder import FrozenMomentEncoder
-from models.classifier import LinearClassifier
-from models.moment_classifier import MomentClassifier
+from models.encoder import FrozenMomentEncoder
+from models.head import LinearClassifier
+from models.model import MomentModel
 from trainers.linear_probe_trainer import train_one_epoch, evaluate
 from utils.seed import set_seed
 
@@ -21,10 +21,10 @@ TRAIN_FILE = DATA_DIR / "ECG5000_TRAIN.ts"
 TEST_FILE = DATA_DIR / "ECG5000_TEST.ts"
 
 BATCH_SIZE = 64
-EPOCHS = 10
+EPOCHS = 15
 LR = 1e-3
 SEED = 42
-MODEL_NAME = "AutonLab/MOMENT-1-small"
+MODEL_NAME = "AutonLab/MOMENT-1-base"
 SAVE_PATH = PROJECT_ROOT / "linear_probe_best.pt"
 
 
@@ -107,7 +107,7 @@ def main():
     print(f"Classes: {[str(c) for c in label_encoder.classes_]}")
 
     head = LinearClassifier(in_dim=embedding_dim, num_classes=num_classes)
-    model = MomentClassifier(encoder=encoder, head=head).to(DEVICE)
+    model = MomentModel(encoder=encoder, head=head).to(DEVICE)
 
     optimizer = torch.optim.Adam(model.head.parameters(), lr=LR)
 
@@ -138,7 +138,7 @@ def main():
                 },
                 SAVE_PATH,
             )
-            print(f"Saved best model to: {SAVE_PATH}")
+            # print(f"Saved best model to: {SAVE_PATH}")
 
     print(f"\nBest test accuracy: {best_test_acc:.4f}")
 
