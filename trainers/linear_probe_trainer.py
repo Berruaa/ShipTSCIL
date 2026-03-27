@@ -5,13 +5,19 @@ from tqdm import tqdm
 
 def train_one_epoch(model, dataloader, optimizer, device="cpu"):
     model.train()
-    model.encoder.eval()  # keep frozen encoder in eval mode
+    model.encoder.eval()  # frozen encoder
 
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
 
-    for batch_x, batch_mask, batch_y in tqdm(dataloader, total=len(dataloader), desc="Train", leave=False, disable=True):
+    for batch_x, batch_mask, batch_y in tqdm(
+        dataloader,
+        total=len(dataloader),
+        desc="Train",
+        leave=False,
+        disable=True,
+    ):
         batch_x = batch_x.to(device).float()
         batch_mask = batch_mask.to(device)
         batch_y = batch_y.to(device)
@@ -48,7 +54,13 @@ def evaluate(model, dataloader, device="cpu"):
     total_correct = 0
     total_samples = 0
 
-    for batch_x, batch_mask, batch_y in tqdm(dataloader, total=len(dataloader), desc="Eval", leave=False):
+    for batch_x, batch_mask, batch_y in tqdm(
+        dataloader,
+        total=len(dataloader),
+        desc="Eval",
+        leave=False,
+        disable=True,
+    ):
         batch_x = batch_x.to(device).float()
         batch_mask = batch_mask.to(device)
         batch_y = batch_y.to(device)
