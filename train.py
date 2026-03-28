@@ -21,7 +21,7 @@ CONFIG = {
     "train_file": None,  # e.g. DATA_DIR / "MYDATA_TRAIN.ts"
     "test_file": None,   # e.g. DATA_DIR / "MYDATA_TEST.ts"
     "batch_size": 64,
-    "epochs": 5,
+    "epochs": 20,
     "lr": 1e-3,
     "seed": 42,
     "num_workers": 0,
