@@ -15,7 +15,10 @@ class BaseMethod:
 
         self.encoder = FrozenMomentEncoder(model_name=model_name).to(device)
         self.embedding_dim = self._infer_embedding_dim(train_dataset)
-        self.head = LinearClassifier(in_dim=self.embedding_dim, num_classes=num_classes)
+        self.head = LinearClassifier(
+            in_dim=self.embedding_dim,
+            num_classes=num_classes,
+        ).to(device)
         self.model = MomentModel(encoder=self.encoder, head=self.head).to(device)
 
         self.optimizer = None

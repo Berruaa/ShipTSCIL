@@ -10,7 +10,12 @@ DATASET_REGISTRY = {
     },
     "italy_power_demand": {
         "train": "ItalyPowerDemand_TRAIN.ts",
-        "test": "ItalyPowerDemand.ts",
+        "test": "ItalyPowerDemand_TEST.ts",
+    },
+
+    "electric_devices": {
+        "train": "ElectricDevices_TRAIN.ts",
+        "test": "ElectricDevices_TEST.ts",
     }
     # Add more datasets here later
     # "ucr_dataset_name": {
