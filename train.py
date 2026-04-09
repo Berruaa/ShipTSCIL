@@ -23,7 +23,7 @@ CONFIG = {
     "batch_size": 64,
     "epochs": 20,
     "lr": 1e-3,
-    "seed": 42,
+    "seed": 1003,
     "num_workers": 0,
     "model_name": "AutonLab/MOMENT-1-base",
 }
