@@ -1,7 +1,13 @@
 from sklearn.metrics import classification_report, confusion_matrix
 
 
-SEQUENTIAL_METHODS = {"cil_naive", "raw_replay", "latent_replay"}
+SEQUENTIAL_METHODS = {
+    "cil_naive",
+    "cil_replay_raw",
+    "cil_replay_latent",
+    "raw_replay",
+    "latent_replay",
+}
 
 
 def print_run_info(config, dataset_info, label_encoder, method, device):
@@ -65,6 +71,7 @@ def print_classification_report_and_confusion(
             y_pred,
             target_names=[str(c) for c in label_encoder.classes_],
             digits=4,
+            zero_division=0,
         )
     )
     print(confusion_title)
@@ -72,7 +79,7 @@ def print_classification_report_and_confusion(
 
 
 def print_best_accuracy(best_acc, sequential=False):
-    label = "Best seen-class accuracy" if sequential else "Best test accuracy"
+    label = "Best seen-class accuracy during training" if sequential else "Best test accuracy"
     print(f"\n{label}: {best_acc:.4f}")
 
 
