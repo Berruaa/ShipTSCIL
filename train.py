@@ -39,6 +39,7 @@ CONFIG = {
     # supported:
     # "svm", "linear_probe", "cil_naive"
     # "cil_replay_raw", "cil_replay_latent"
+    # "cil_lwf"
     "method": "cil_replay_latent",
 
     "dataset": "electric_devices",
@@ -53,16 +54,23 @@ CONFIG = {
     "model_name": "AutonLab/MOMENT-1-base",
 
     # class-incremental setup
+
     # "task_splits": [[0, 1, 2], [3, 4], [5, 6]],
-    "task_splits": [[0], [1], [2], [3], [4], [5], [6]],
+    # "task_splits": [[0], [1], [2], [3], [4], [5], [6]],
+    "task_splits": [[0, 1], [2, 3], [4]],
     "replay_buffer_size": 1000,
     "replay_batch_size": 32,
     "balanced_replay": True,        # True = class-balanced buffer, False = plain reservoir
     "balanced_loss": True,          # True = class-weighted CE loss,  False = standard CE
+
+    # LwF distillation (works with cil_replay_latent and cil_lwf)
+    "use_distillation": True,       # add KD loss on top of replay
+    "distill_temperature": 2.0,     # softmax temperature for knowledge distillation
+    "distill_weight": 1.0,          # multiplier for KD loss (additive: CE + λ·KD)
 }
 
 STANDARD_METHODS = {"linear_probe", "svm"}
-SEQUENTIAL_METHODS = {"cil_naive", "cil_replay_raw", "cil_replay_latent"}
+SEQUENTIAL_METHODS = {"cil_naive", "cil_replay_raw", "cil_replay_latent", "cil_lwf"}
 
 
 def _make_run_dir(config):
@@ -98,6 +106,9 @@ def main():
         replay_batch_size=CONFIG.get("replay_batch_size", 32),
         balanced_replay=CONFIG.get("balanced_replay", True),
         balanced_loss=CONFIG.get("balanced_loss", True),
+        use_distillation=CONFIG.get("use_distillation", False),
+        distill_temperature=CONFIG.get("distill_temperature", 2.0),
+        distill_weight=CONFIG.get("distill_weight", 1.0),
     )
 
     print_run_info(
@@ -150,17 +161,21 @@ def main():
         dataset_key = CONFIG["dataset"]
         bal_buf = CONFIG.get("balanced_replay")
         bal_loss = CONFIG.get("balanced_loss")
+        distill = CONFIG.get("use_distillation")
         plot_training_curves(history, run_dir / "training_curves.png",
                              method_name=method_key, dataset_name=dataset_key,
-                             balanced_replay=bal_buf, balanced_loss=bal_loss)
+                             balanced_replay=bal_buf, balanced_loss=bal_loss,
+                             use_distillation=distill)
         plot_confusion_matrix(y_true, y_pred, class_names,
                               run_dir / "confusion_matrix.png",
                               method_name=method_key, dataset_name=dataset_key,
-                              balanced_replay=bal_buf, balanced_loss=bal_loss)
+                              balanced_replay=bal_buf, balanced_loss=bal_loss,
+                              use_distillation=distill)
         plot_per_class_accuracy(y_true, y_pred, class_names,
                                 run_dir / "per_class_accuracy.png",
                                 method_name=method_key, dataset_name=dataset_key,
-                                balanced_replay=bal_buf, balanced_loss=bal_loss)
+                                balanced_replay=bal_buf, balanced_loss=bal_loss,
+                                use_distillation=distill)
 
         print(f"\nPlots saved to: {run_dir}")
         return
@@ -207,25 +222,31 @@ def main():
         dataset_key = CONFIG["dataset"]
         bal_buf = CONFIG.get("balanced_replay")
         bal_loss = CONFIG.get("balanced_loss")
+        distill = CONFIG.get("use_distillation")
         plot_sequential_training_curves(history, run_dir / "training_curves.png",
                                         method_name=method_key, dataset_name=dataset_key,
-                                        balanced_replay=bal_buf, balanced_loss=bal_loss)
+                                        balanced_replay=bal_buf, balanced_loss=bal_loss,
+                                        use_distillation=distill)
         plot_task_accuracy_progression(task_results,
                                        run_dir / "task_accuracy_progression.png",
                                        method_name=method_key, dataset_name=dataset_key,
-                                       balanced_replay=bal_buf, balanced_loss=bal_loss)
+                                       balanced_replay=bal_buf, balanced_loss=bal_loss,
+                                       use_distillation=distill)
         plot_confusion_matrix(y_true, y_pred, class_names,
                               run_dir / "confusion_matrix.png",
                               method_name=method_key, dataset_name=dataset_key,
-                              balanced_replay=bal_buf, balanced_loss=bal_loss)
+                              balanced_replay=bal_buf, balanced_loss=bal_loss,
+                              use_distillation=distill)
         plot_per_class_accuracy(y_true, y_pred, class_names,
                                 run_dir / "per_class_accuracy.png",
                                 method_name=method_key, dataset_name=dataset_key,
-                                balanced_replay=bal_buf, balanced_loss=bal_loss)
+                                balanced_replay=bal_buf, balanced_loss=bal_loss,
+                                use_distillation=distill)
         plot_sequential_summary(history, task_results, y_true, y_pred,
                                 class_names, run_dir / "summary.png",
                                 method_name=method_key, dataset_name=dataset_key,
-                                balanced_replay=bal_buf, balanced_loss=bal_loss)
+                                balanced_replay=bal_buf, balanced_loss=bal_loss,
+                                use_distillation=distill)
 
         print(f"\nPlots saved to: {run_dir}")
         return

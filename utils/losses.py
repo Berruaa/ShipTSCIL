@@ -6,6 +6,32 @@ import torch
 import torch.nn.functional as F
 
 
+def distillation_loss(
+    new_logits: torch.Tensor,
+    old_logits: torch.Tensor,
+    old_classes: list[int],
+    temperature: float = 2.0,
+) -> torch.Tensor:
+    """
+    Knowledge-distillation loss (LwF) over old-class logits.
+
+    Computes KL divergence between temperature-scaled softmax distributions
+    of the *old* (frozen snapshot) and *new* (current) head, restricted to
+    the subset of outputs that correspond to previously learned classes.
+
+    Returns 0 when ``old_classes`` is empty (first task).
+    """
+    if not old_classes:
+        return new_logits.new_tensor(0.0)
+
+    old_idx = torch.tensor(old_classes, dtype=torch.long, device=new_logits.device)
+
+    soft_targets = F.softmax(old_logits[:, old_idx] / temperature, dim=1)
+    log_soft_preds = F.log_softmax(new_logits[:, old_idx] / temperature, dim=1)
+
+    return F.kl_div(log_soft_preds, soft_targets, reduction="batchmean") * (temperature ** 2)
+
+
 def class_balanced_ce_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """
     Cross-entropy loss with per-batch inverse-frequency class weighting.

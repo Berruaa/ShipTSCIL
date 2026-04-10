@@ -85,6 +85,9 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
         print(f"Starting Task {task_id}/{len(config['task_splits'])}")
         print(f"Current task classes: {task_classes}")
 
+        old_classes = list(seen_classes)
+        method.begin_task(task_id, task_classes, old_classes)
+
         seen_classes.extend(task_classes)
         seen_classes = sorted(set(seen_classes))
 
@@ -134,6 +137,8 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
                 )
 
         history[task_id] = dict(task_hist)
+
+        method.end_task(task_id, seen_classes)
 
         final_seen_metrics, _ = evaluate_on_seen_classes(
             method=method,

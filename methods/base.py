@@ -32,6 +32,18 @@ class BaseMethod:
         embeddings = self.encoder(sample_x, sample_mask)
         return embeddings.shape[-1]
 
+    # ------------------------------------------------------------------
+    # Task lifecycle hooks (overridden by methods that need them, e.g. LwF)
+    # ------------------------------------------------------------------
+
+    def begin_task(self, task_id, task_classes, old_classes):
+        """Called before training on a new task. Default: no-op."""
+
+    def end_task(self, task_id, seen_classes):
+        """Called after all epochs for a task are complete. Default: no-op."""
+
+    # ------------------------------------------------------------------
+
     def train_epoch(self, dataloader):
         raise NotImplementedError
 
