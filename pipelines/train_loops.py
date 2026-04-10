@@ -1,3 +1,4 @@
+from collections import defaultdict
 from copy import deepcopy
 
 from pipelines.data import build_loader, make_class_subset
@@ -13,6 +14,7 @@ def train_standard(method, train_loader, test_loader, config, label_encoder, sav
         checkpoint_path = save_dir / f"{config['dataset']}_{config['method']}_best.pt"
 
     best_test_acc = 0.0
+    history = defaultdict(list)
 
     if config["method"] == "svm":
         train_metrics = method.train_epoch(train_loader)
@@ -25,6 +27,11 @@ def train_standard(method, train_loader, test_loader, config, label_encoder, sav
             test_metrics=test_metrics,
         )
 
+        history["train_loss"].append(train_metrics["loss"])
+        history["train_acc"].append(train_metrics["acc"])
+        history["test_loss"].append(test_metrics["loss"])
+        history["test_acc"].append(test_metrics["acc"])
+
         best_test_acc = test_metrics["acc"]
         method.save(
             checkpoint_path=checkpoint_path,
@@ -32,7 +39,7 @@ def train_standard(method, train_loader, test_loader, config, label_encoder, sav
             dataset_name=config["dataset"],
             extra_config=config,
         )
-        return checkpoint_path, best_test_acc
+        return checkpoint_path, best_test_acc, dict(history)
 
     for epoch in range(1, config["epochs"] + 1):
         train_metrics = method.train_epoch(train_loader)
@@ -45,6 +52,11 @@ def train_standard(method, train_loader, test_loader, config, label_encoder, sav
             test_metrics=test_metrics,
         )
 
+        history["train_loss"].append(train_metrics["loss"])
+        history["train_acc"].append(train_metrics["acc"])
+        history["test_loss"].append(test_metrics["loss"])
+        history["test_acc"].append(test_metrics["acc"])
+
         if test_metrics["acc"] > best_test_acc:
             best_test_acc = test_metrics["acc"]
             method.save(
@@ -54,7 +66,7 @@ def train_standard(method, train_loader, test_loader, config, label_encoder, sav
                 extra_config=config,
             )
 
-    return checkpoint_path, best_test_acc
+    return checkpoint_path, best_test_acc, dict(history)
 
 
 def train_sequential(method, train_dataset, test_dataset, config, label_encoder, save_dir):
@@ -66,6 +78,7 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
 
     seen_classes = []
     task_results = []
+    history = {}
 
     for task_id, task_classes in enumerate(config["task_splits"], start=1):
         print("\n" + "=" * 80)
@@ -86,6 +99,8 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
         print(f"Seen classes so far: {seen_classes}")
         print(f"Task train size: {len(task_train_subset)}")
 
+        task_hist = defaultdict(list)
+
         for epoch in range(1, config["epochs"] + 1):
             train_metrics = method.train_epoch(task_train_loader)
             seen_test_metrics, _ = evaluate_on_seen_classes(
@@ -104,6 +119,11 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
                 seen_test_metrics=seen_test_metrics,
             )
 
+            task_hist["train_loss"].append(train_metrics["loss"])
+            task_hist["train_acc"].append(train_metrics["acc"])
+            task_hist["seen_test_loss"].append(seen_test_metrics["loss"])
+            task_hist["seen_test_acc"].append(seen_test_metrics["acc"])
+
             if seen_test_metrics["acc"] > best_seen_acc:
                 best_seen_acc = seen_test_metrics["acc"]
                 method.save(
@@ -112,6 +132,8 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
                     dataset_name=config["dataset"],
                     extra_config=config,
                 )
+
+        history[task_id] = dict(task_hist)
 
         final_seen_metrics, _ = evaluate_on_seen_classes(
             method=method,
@@ -135,4 +157,4 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
         extra_config=config,
     )
 
-    return best_checkpoint_path, final_checkpoint_path, best_seen_acc, task_results
+    return best_checkpoint_path, final_checkpoint_path, best_seen_acc, task_results, history

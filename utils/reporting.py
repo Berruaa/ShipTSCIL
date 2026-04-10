@@ -9,6 +9,13 @@ SEQUENTIAL_METHODS = {
     "latent_replay",
 }
 
+REPLAY_METHODS = {
+    "cil_replay_raw",
+    "cil_replay_latent",
+    "raw_replay",
+    "latent_replay",
+}
+
 
 def print_run_info(config, dataset_info, label_encoder, method, device):
     print(f"Using device: {device}")
@@ -22,6 +29,17 @@ def print_run_info(config, dataset_info, label_encoder, method, device):
 
     if config["method"] in SEQUENTIAL_METHODS:
         print(f"Task splits: {config['task_splits']}")
+
+    if config["method"] in REPLAY_METHODS:
+        balanced = config.get("balanced_replay", True)
+        buf_type = "class-balanced" if balanced else "reservoir (class-agnostic)"
+        print(f"Replay buffer: {buf_type}  "
+              f"(size={config.get('replay_buffer_size', 1000)}, "
+              f"batch={config.get('replay_batch_size', 32)})")
+
+        bal_loss = config.get("balanced_loss", True)
+        loss_type = "class-weighted CE" if bal_loss else "standard CE"
+        print(f"Loss function: {loss_type}")
 
 
 def print_standard_epoch(epoch, total_epochs, train_metrics, test_metrics):

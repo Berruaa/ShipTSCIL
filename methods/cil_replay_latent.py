@@ -7,13 +7,17 @@ from utils.losses import class_balanced_ce_loss
 from utils.replay_buffers import build_replay_buffer
 
 
-class CILReplayRawMethod(LinearProbeMethod):
+class CILReplayLatentMethod(LinearProbeMethod):
     """
-    Class-incremental learning with raw sample replay.
+    Class-incremental learning with latent (embedding) replay.
 
-    Keeps a fixed-size memory buffer of raw (x, mask, y) samples.  The buffer
-    can be either class-balanced (equal storage per class) or a plain
-    reservoir (class-agnostic), controlled by the ``balanced_replay`` flag.
+    Stores encoder embeddings (z, y) in a replay buffer.  The buffer can be
+    either class-balanced (equal storage per class) or a plain reservoir
+    (class-agnostic), controlled by the ``balanced_replay`` flag.
+
+    Because the MOMENT encoder is frozen, stored embeddings are identical to
+    freshly computed ones, so replaying through the head alone is lossless
+    while saving both memory and compute.
     """
 
     def __init__(
@@ -48,24 +52,21 @@ class CILReplayRawMethod(LinearProbeMethod):
     # Buffer helpers
     # ------------------------------------------------------------------
 
-    def _add_to_replay(self, batch_x, batch_mask, batch_y):
-        """Store (x, mask, y) tuples into the class-balanced buffer."""
+    def _add_to_replay(self, embeddings: torch.Tensor, labels: torch.Tensor):
+        """Store (embedding, label) pairs into the class-balanced buffer."""
         if self.replay_buffer_size <= 0:
             return
 
-        batch_x_cpu = batch_x.detach().cpu()
-        batch_mask_cpu = batch_mask.detach().cpu()
-        batch_y_cpu = batch_y.detach().cpu()
+        emb_cpu = embeddings.detach().cpu()
+        lab_cpu = labels.detach().cpu()
 
-        samples = [
-            (batch_x_cpu[i].clone(), batch_mask_cpu[i].clone(), int(batch_y_cpu[i].item()))
-            for i in range(batch_x_cpu.size(0))
-        ]
-        labels_list = [s[2] for s in samples]
+        samples = [(emb_cpu[i].clone(), int(lab_cpu[i].item()))
+                    for i in range(emb_cpu.size(0))]
+        labels_list = [s[1] for s in samples]
         self._buffer.add_batch(samples, labels_list)
 
     def _sample_replay_batch(self):
-        """Return a class-balanced (x, mask, y) mini-batch."""
+        """Return a class-balanced (embeddings, labels) mini-batch."""
         if len(self._buffer) == 0 or self.replay_batch_size <= 0:
             return None
 
@@ -73,12 +74,13 @@ class CILReplayRawMethod(LinearProbeMethod):
         if not selected:
             return None
 
-        replay_x = torch.stack([s[0] for s in selected], dim=0).to(self.device).float()
-        replay_mask = torch.stack([s[1] for s in selected], dim=0).to(self.device)
+        replay_z = torch.stack([s[0] for s in selected], dim=0).to(self.device).float()
         replay_y = torch.tensor(
-            [s[2] for s in selected], dtype=torch.long, device=self.device,
+            [s[1] for s in selected],
+            dtype=torch.long,
+            device=self.device,
         )
-        return replay_x, replay_mask, replay_y
+        return replay_z, replay_y
 
     # ------------------------------------------------------------------
     # Training
@@ -103,17 +105,20 @@ class CILReplayRawMethod(LinearProbeMethod):
             batch_mask = batch_mask.to(self.device)
             batch_y = batch_y.to(self.device)
 
+            with torch.no_grad():
+                current_emb = self.model.encoder(batch_x, batch_mask)
+
             replay_batch = self._sample_replay_batch()
             if replay_batch is not None:
-                replay_x, replay_mask, replay_y = replay_batch
-                train_x = torch.cat([batch_x, replay_x], dim=0)
-                train_mask = torch.cat([batch_mask, replay_mask], dim=0)
+                replay_z, replay_y = replay_batch
+                train_emb = torch.cat([current_emb, replay_z], dim=0)
                 train_y = torch.cat([batch_y, replay_y], dim=0)
             else:
-                train_x, train_mask, train_y = batch_x, batch_mask, batch_y
+                train_emb = current_emb
+                train_y = batch_y
 
             self.optimizer.zero_grad()
-            logits, _ = self.model(train_x, train_mask)
+            logits = self.model.head(train_emb)
             if self.balanced_loss:
                 loss = class_balanced_ce_loss(logits, train_y)
             else:
@@ -127,7 +132,7 @@ class CILReplayRawMethod(LinearProbeMethod):
             total_correct += (preds == train_y).sum().item()
             total_samples += batch_size
 
-            self._add_to_replay(batch_x, batch_mask, batch_y)
+            self._add_to_replay(current_emb, batch_y)
 
         avg_loss = total_loss / total_samples
         avg_acc = total_correct / total_samples
