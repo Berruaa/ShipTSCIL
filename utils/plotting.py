@@ -12,7 +12,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix
 
 # ── Style defaults ────────────────────────────────────────────────────
 plt.rcParams.update({
@@ -38,20 +38,9 @@ METHOD_DISPLAY_NAMES = {
     "cil_replay_raw":    "CIL Raw Replay",
     "cil_replay_latent": "CIL Latent Replay",
     "cil_lwf":           "CIL LwF (Distill-only)",
-    "raw_replay":        "CIL Raw Replay",
-    "latent_replay":     "CIL Latent Replay",
-    "lwf":               "CIL LwF (Distill-only)",
 }
 
-DATASET_DISPLAY_NAMES = {
-    "ecg5000":             "ECG5000",
-    "electric_devices":    "ElectricDevices",
-    "italy_power_demand":  "ItalyPowerDemand",
-    "ford_a":              "FordA",
-}
-
-
-REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent", "raw_replay", "latent_replay"}
+REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
 
 
 def _pretty_method(method_name: str,
@@ -73,7 +62,14 @@ def _pretty_method(method_name: str,
 
 
 def _pretty_dataset(dataset_name: str) -> str:
-    return DATASET_DISPLAY_NAMES.get(dataset_name, dataset_name)
+    """Convert ``snake_case`` key to a display name.
+
+    Each ``_``-separated token is title-cased.  Tokens that contain
+    digits are upper-cased entirely (``ecg5000`` → ``ECG5000``).
+    """
+    parts = dataset_name.split("_")
+    return "".join(p.upper() if any(c.isdigit() for c in p) else p.title()
+                   for p in parts)
 
 
 def _header(method_name: str, dataset_name: str,
@@ -158,7 +154,7 @@ def plot_sequential_training_curves(history: dict, save_path, *,
     fig, axes = plt.subplots(num_tasks, 2, figsize=(12, 4 * num_tasks),
                              squeeze=False)
 
-    cmap = plt.cm.get_cmap("tab10", num_tasks)
+    cmap = plt.colormaps.get_cmap("tab10").resampled(num_tasks)
 
     for i, (task_id, task_hist) in enumerate(sorted(history.items())):
         epochs = range(1, len(task_hist["train_loss"]) + 1)
@@ -344,64 +340,158 @@ def plot_per_class_accuracy(y_true, y_pred, class_names: list[str], save_path, *
 
 
 # =====================================================================
-#  Combined summary figure (sequential only)
+#  Forgetting analysis (sequential only)
 # =====================================================================
 
-def plot_sequential_summary(history, task_results, y_true, y_pred,
-                            class_names, save_path, *,
-                            method_name: str = "", dataset_name: str = "",
-                            balanced_replay: bool | None = None,
-                            balanced_loss: bool | None = None,
-                            use_distillation: bool | None = None):
-    """
-    All-in-one summary page for a sequential run: a compact accuracy
-    progression line at the top plus the final confusion matrix below.
-    """
-    fig = plt.figure(figsize=(14, 6))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1, 1])
+def _build_acc_matrix(task_results):
+    """Build a (num_tasks x num_tasks) accuracy matrix.
 
-    # ---- Accuracy progression (left) ----
-    ax_prog = fig.add_subplot(gs[0, 0])
-    task_ids = [r["task_id"] for r in task_results]
-    accs = [r["seen_acc"] for r in task_results]
-    ax_prog.plot(task_ids, accs, marker="D", color="#d62728", linewidth=2)
-    ax_prog.fill_between(task_ids, accs, alpha=0.15, color="#d62728")
-    for tid, acc in zip(task_ids, accs):
-        ax_prog.annotate(f"{acc:.2%}", (tid, acc), textcoords="offset points",
-                         xytext=(0, 10), ha="center", fontweight="bold", fontsize=9)
-    ax_prog.set_xlabel("Task")
-    ax_prog.set_ylabel("Seen-class Accuracy")
-    ax_prog.set_title("Accuracy Progression")
-    ax_prog.set_ylim(0, 1.12)
-    ax_prog.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-    ax_prog.grid(alpha=0.3)
+    ``acc_matrix[i, j]`` = accuracy on task *j+1* after training up to
+    task *i+1*.  Upper-triangle entries (tasks not yet seen) are NaN.
+    """
+    num_tasks = len(task_results)
+    acc_matrix = np.full((num_tasks, num_tasks), np.nan)
+    for row, result in enumerate(task_results):
+        per_task = result.get("per_task_acc", {})
+        for task_j, acc_val in per_task.items():
+            col = int(task_j) - 1
+            acc_matrix[row, col] = acc_val
+    return acc_matrix
 
-    # ---- Confusion matrix (right) ----
-    ax_cm = fig.add_subplot(gs[0, 1])
-    cm = confusion_matrix(y_true, y_pred)
-    n = len(class_names)
-    im = ax_cm.imshow(cm, interpolation="nearest", cmap="Blues")
-    fig.colorbar(im, ax=ax_cm, fraction=0.046, pad=0.04)
-    thresh = cm.max() / 2.0
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            ax_cm.text(j, i, str(cm[i, j]), ha="center", va="center",
-                       fontsize=max(6, 9 - n // 5),
-                       color="white" if cm[i, j] > thresh else "black")
-    ax_cm.set_xticks(range(n))
-    ax_cm.set_yticks(range(n))
-    ax_cm.set_xticklabels(class_names, rotation=45, ha="right",
-                          fontsize=max(6, 9 - n // 5))
-    ax_cm.set_yticklabels(class_names, fontsize=max(6, 9 - n // 5))
-    ax_cm.set_xlabel("Predicted")
-    ax_cm.set_ylabel("True")
-    ax_cm.set_title("Final Confusion Matrix")
+
+def plot_forgetting_analysis(task_results, save_path, *,
+                             method_name: str = "", dataset_name: str = "",
+                             balanced_replay: bool | None = None,
+                             balanced_loss: bool | None = None,
+                             use_distillation: bool | None = None):
+    """
+    CIL-specific analysis page:
+
+    * **Left** – accuracy heatmap: rows = "after learning task i",
+      columns = "accuracy on task j".  Shows exactly where forgetting
+      happens.
+    * **Right** – per-task forgetting bars + key scalar metrics (AIA,
+      average forgetting, backward transfer).
+    """
+    acc_matrix = _build_acc_matrix(task_results)
+    num_tasks = acc_matrix.shape[0]
+
+    # ── Scalar CIL metrics ──────────────────────────────────────
+    # Average Incremental Accuracy: mean of seen-class acc after each task
+    aia = np.mean([r["seen_acc"] for r in task_results])
+
+    # Per-task forgetting: max accuracy on task j across all steps up to
+    # the current one, minus its final accuracy.
+    forgetting = []
+    for j in range(num_tasks):
+        col = acc_matrix[:, j]
+        valid = col[~np.isnan(col)]
+        if len(valid) >= 2:
+            forgetting.append(float(np.max(valid) - valid[-1]))
+        else:
+            forgetting.append(0.0)
+    avg_forgetting = np.mean(forgetting) if forgetting else 0.0
+
+    # Backward transfer: for each task j, final_acc(j) - acc_right_after_learning(j)
+    bwt_vals = []
+    for j in range(num_tasks):
+        learned_at = j
+        final_at = num_tasks - 1
+        if learned_at < final_at and not np.isnan(acc_matrix[learned_at, j]):
+            bwt_vals.append(acc_matrix[final_at, j] - acc_matrix[learned_at, j])
+    avg_bwt = np.mean(bwt_vals) if bwt_vals else 0.0
+
+    # ── Figure ──────────────────────────────────────────────────
+    fig, (ax_heat, ax_bar) = plt.subplots(1, 2, figsize=(14, max(5, 1.2 * num_tasks + 2)))
+
+    # -- Left: accuracy heatmap --
+    masked = np.ma.array(acc_matrix, mask=np.isnan(acc_matrix))
+    im = ax_heat.imshow(masked, cmap="RdYlGn", vmin=0, vmax=1, aspect="auto")
+    fig.colorbar(im, ax=ax_heat, fraction=0.046, pad=0.04, label="Accuracy")
+    for i in range(num_tasks):
+        for j in range(num_tasks):
+            val = acc_matrix[i, j]
+            if not np.isnan(val):
+                ax_heat.text(j, i, f"{val:.0%}", ha="center", va="center",
+                             fontsize=max(7, 11 - num_tasks // 3),
+                             fontweight="bold",
+                             color="white" if val < 0.45 else "black")
+    ax_heat.set_xticks(range(num_tasks))
+    ax_heat.set_yticks(range(num_tasks))
+    ax_heat.set_xticklabels([f"Task {i+1}" for i in range(num_tasks)], fontsize=9)
+    ax_heat.set_yticklabels([f"After Task {i+1}" for i in range(num_tasks)], fontsize=9)
+    ax_heat.set_xlabel("Evaluated on")
+    ax_heat.set_ylabel("Model state")
+    ax_heat.set_title("Per-Task Accuracy Over Time")
+
+    # -- Right: forgetting bars + metrics --
+    task_labels = [f"Task {i+1}" for i in range(num_tasks)]
+    y_pos = np.arange(num_tasks)
+    colors = ["#d62728" if f > 0.05 else "#2ca02c" for f in forgetting]
+    bars = ax_bar.barh(y_pos, forgetting, color=colors, edgecolor="black", linewidth=0.4)
+    for bar, f_val in zip(bars, forgetting):
+        ax_bar.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2,
+                    f"{f_val:.2%}", va="center", fontsize=9)
+    ax_bar.set_yticks(y_pos)
+    ax_bar.set_yticklabels(task_labels, fontsize=9)
+    ax_bar.set_xlabel("Forgetting (peak acc − final acc)")
+    ax_bar.set_title("Per-Task Forgetting")
+    ax_bar.set_xlim(0, max(0.2, max(forgetting) * 1.3 + 0.05) if forgetting else 0.2)
+    ax_bar.invert_yaxis()
+    ax_bar.grid(axis="x", alpha=0.3)
+
+    # Metrics text box
+    metrics_text = (
+        f"Avg. Incremental Acc (AIA): {aia:.2%}\n"
+        f"Avg. Forgetting: {avg_forgetting:.2%}\n"
+        f"Backward Transfer (BWT): {avg_bwt:+.2%}"
+    )
+    ax_bar.text(
+        0.97, 0.97, metrics_text, transform=ax_bar.transAxes,
+        fontsize=10, verticalalignment="top", horizontalalignment="right",
+        bbox=dict(boxstyle="round,pad=0.4", facecolor="lightyellow",
+                  edgecolor="grey", alpha=0.9),
+    )
 
     fig.suptitle(
-        f"Sequential Summary — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)}",
+        f"Forgetting Analysis — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)}",
         fontsize=14, y=1.02,
     )
     _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)
     fig.tight_layout()
     fig.savefig(save_path)
     plt.close(fig)
+
+
+# =====================================================================
+#  Convenience wrappers (called from train.py)
+# =====================================================================
+
+def _plot_kwargs(config):
+    return dict(
+        method_name=config["method"],
+        dataset_name=config["dataset"],
+        balanced_replay=config.get("balanced_replay"),
+        balanced_loss=config.get("balanced_loss"),
+        use_distillation=config.get("use_distillation"),
+    )
+
+
+def save_standard_plots(history, y_true, y_pred, class_names, run_dir, config):
+    """Save all plots for a standard (non-sequential) run."""
+    pkw = _plot_kwargs(config)
+    plot_training_curves(history, run_dir / "training_curves.png", **pkw)
+    plot_confusion_matrix(y_true, y_pred, class_names, run_dir / "confusion_matrix.png", **pkw)
+    plot_per_class_accuracy(y_true, y_pred, class_names, run_dir / "per_class_accuracy.png", **pkw)
+    print(f"\nPlots saved to: {run_dir}")
+
+
+def save_sequential_plots(history, task_results, y_true, y_pred, class_names, run_dir, config):
+    """Save all plots for a sequential (CIL) run."""
+    pkw = _plot_kwargs(config)
+    plot_sequential_training_curves(history, run_dir / "training_curves.png", **pkw)
+    plot_task_accuracy_progression(task_results, run_dir / "task_accuracy_progression.png", **pkw)
+    plot_confusion_matrix(y_true, y_pred, class_names, run_dir / "confusion_matrix.png", **pkw)
+    plot_per_class_accuracy(y_true, y_pred, class_names, run_dir / "per_class_accuracy.png", **pkw)
+    plot_forgetting_analysis(task_results, run_dir / "forgetting_analysis.png", **pkw)
+    print(f"\nPlots saved to: {run_dir}")

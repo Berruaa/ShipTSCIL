@@ -38,11 +38,15 @@ class SVMMethod:
         features = []
         labels = []
 
-        for batch_x, batch_mask, batch_y in dataloader:
-            batch_x = batch_x.to(self.device).float()
-            batch_mask = batch_mask.to(self.device)
-
-            emb = self.encoder(batch_x, batch_mask)
+        for batch in dataloader:
+            if len(batch) == 2:
+                emb, batch_y = batch
+                emb = emb.float()
+            else:
+                batch_x, batch_mask, batch_y = batch
+                batch_x = batch_x.to(self.device).float()
+                batch_mask = batch_mask.to(self.device)
+                emb = self.encoder(batch_x, batch_mask)
 
             features.append(emb.cpu().numpy())
             labels.append(batch_y.cpu().numpy())

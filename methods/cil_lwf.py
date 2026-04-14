@@ -81,19 +81,23 @@ class CILLwFMethod(LinearProbeMethod):
         total_correct = 0
         total_samples = 0
 
-        for batch_x, batch_mask, batch_y in tqdm(
+        for batch in tqdm(
             dataloader,
             total=len(dataloader),
             desc="Train",
             leave=False,
             disable=True,
         ):
-            batch_x = batch_x.to(self.device).float()
-            batch_mask = batch_mask.to(self.device)
+            if len(batch) == 2:
+                embeddings, batch_y = batch
+                embeddings = embeddings.to(self.device).float()
+            else:
+                batch_x, batch_mask, batch_y = batch
+                batch_x = batch_x.to(self.device).float()
+                batch_mask = batch_mask.to(self.device)
+                with torch.no_grad():
+                    embeddings = self.model.encoder(batch_x, batch_mask)
             batch_y = batch_y.to(self.device)
-
-            with torch.no_grad():
-                embeddings = self.model.encoder(batch_x, batch_mask)
 
             logits = self.model.head(embeddings)
 

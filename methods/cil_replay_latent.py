@@ -127,19 +127,23 @@ class CILReplayLatentMethod(LinearProbeMethod):
         total_correct = 0
         total_samples = 0
 
-        for batch_x, batch_mask, batch_y in tqdm(
+        for batch in tqdm(
             dataloader,
             total=len(dataloader),
             desc="Train",
             leave=False,
             disable=True,
         ):
-            batch_x = batch_x.to(self.device).float()
-            batch_mask = batch_mask.to(self.device)
+            if len(batch) == 2:
+                current_emb, batch_y = batch
+                current_emb = current_emb.to(self.device).float()
+            else:
+                batch_x, batch_mask, batch_y = batch
+                batch_x = batch_x.to(self.device).float()
+                batch_mask = batch_mask.to(self.device)
+                with torch.no_grad():
+                    current_emb = self.model.encoder(batch_x, batch_mask)
             batch_y = batch_y.to(self.device)
-
-            with torch.no_grad():
-                current_emb = self.model.encoder(batch_x, batch_mask)
 
             n_current = current_emb.size(0)
 

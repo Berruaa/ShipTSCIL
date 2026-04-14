@@ -11,13 +11,18 @@ def collect_predictions_torch_model(model, dataloader, device):
     preds_list = []
     targets_list = []
 
-    for batch_x, batch_mask, batch_y in dataloader:
-        batch_x = batch_x.to(device).float()
-        batch_mask = batch_mask.to(device)
+    for batch in dataloader:
+        if len(batch) == 2:
+            emb, batch_y = batch
+            emb = emb.to(device).float()
+            logits = model.head(emb)
+        else:
+            batch_x, batch_mask, batch_y = batch
+            batch_x = batch_x.to(device).float()
+            batch_mask = batch_mask.to(device)
+            logits, _ = model(batch_x, batch_mask)
 
-        logits, _ = model(batch_x, batch_mask)
         preds = torch.argmax(logits, dim=1).cpu().numpy()
-
         preds_list.append(preds)
         targets_list.append(batch_y.numpy())
 

@@ -80,9 +80,9 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
     task_results = []
     history = {}
 
-    for task_id, task_classes in enumerate(config["task_splits"], start=1):
+    for task_id, task_classes in enumerate(config["task_order"], start=1):
         print("\n" + "=" * 80)
-        print(f"Starting Task {task_id}/{len(config['task_splits'])}")
+        print(f"Starting Task {task_id}/{len(config['task_order'])}")
         print(f"Current task classes: {task_classes}")
 
         old_classes = list(seen_classes)
@@ -115,7 +115,7 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
 
             print_sequential_epoch(
                 task_id=task_id,
-                num_tasks=len(config["task_splits"]),
+                num_tasks=len(config["task_order"]),
                 epoch=epoch,
                 total_epochs=config["epochs"],
                 train_metrics=train_metrics,
@@ -146,12 +146,25 @@ def train_sequential(method, train_dataset, test_dataset, config, label_encoder,
             seen_classes=seen_classes,
             config=config,
         )
+
+        # Per-task accuracy breakdown (needed for forgetting analysis).
+        per_task_acc = {}
+        for prev_id, prev_classes in enumerate(config["task_order"][:task_id], start=1):
+            prev_metrics, _ = evaluate_on_seen_classes(
+                method=method,
+                test_dataset=test_dataset,
+                seen_classes=prev_classes,
+                config=config,
+            )
+            per_task_acc[prev_id] = prev_metrics["acc"]
+
         task_results.append(
             {
                 "task_id": task_id,
                 "task_classes": deepcopy(task_classes),
                 "seen_classes": deepcopy(seen_classes),
                 "seen_acc": final_seen_metrics["acc"],
+                "per_task_acc": per_task_acc,
             }
         )
 

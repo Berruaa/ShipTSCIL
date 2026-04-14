@@ -5,6 +5,11 @@ from methods.cil_replay_latent import CILReplayLatentMethod
 from methods.cil_lwf import CILLwFMethod
 from methods.svm import SVMMethod
 
+STANDARD_METHODS = {"linear_probe", "svm"}
+SEQUENTIAL_METHODS = {"cil_naive", "cil_replay_raw", "cil_replay_latent", "cil_lwf"}
+REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
+DISTILLATION_METHODS = {"cil_lwf", "cil_replay_latent"}
+
 
 def build_method(
     method_name,

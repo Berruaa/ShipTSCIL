@@ -8,21 +8,23 @@ DATASET_REGISTRY = {
         "train": "ECG5000_TRAIN.ts",
         "test": "ECG5000_TEST.ts",
     },
-    "italy_power_demand": {
-        "train": "ItalyPowerDemand_TRAIN.ts",
-        "test": "ItalyPowerDemand_TEST.ts",
-    },
-
     "electric_devices": {
         "train": "ElectricDevices_TRAIN.ts",
         "test": "ElectricDevices_TEST.ts",
-    }
-    # Add more datasets here later
-    # "ucr_dataset_name": {
-    #     "train": "SomeDataset_TRAIN.ts",
-    #     "test": "SomeDataset_TEST.ts",
-    # },
+    },
+    "uwave_gesture_library": {
+        "train": "UWaveGestureLibrary_TRAIN.ts",
+        "test": "UWaveGestureLibrary_TEST.ts",
+    },
+    "walking_sitting_standing": {
+        "train": "WalkingSittingStanding_TRAIN.ts",
+        "test": "WalkingSittingStanding_TEST.ts",
+    },
 }
+
+
+def _normalize_dataset_name(dataset_name: str) -> str:
+    return dataset_name.strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def build_dataset_pair(dataset_name, data_dir, train_file=None, test_file=None):
@@ -30,12 +32,13 @@ def build_dataset_pair(dataset_name, data_dir, train_file=None, test_file=None):
         train_path = Path(train_file)
         test_path = Path(test_file)
     else:
-        if dataset_name not in DATASET_REGISTRY:
+        dataset_key = _normalize_dataset_name(dataset_name)
+        if dataset_key not in DATASET_REGISTRY:
             raise ValueError(
                 f"Unknown dataset '{dataset_name}'. "
                 f"Available: {list(DATASET_REGISTRY.keys())}"
             )
-        spec = DATASET_REGISTRY[dataset_name]
+        spec = DATASET_REGISTRY[dataset_key]
         train_path = Path(data_dir) / spec["train"]
         test_path = Path(data_dir) / spec["test"]
 

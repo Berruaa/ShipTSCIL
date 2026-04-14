@@ -1,20 +1,6 @@
 from sklearn.metrics import classification_report, confusion_matrix
 
-
-SEQUENTIAL_METHODS = {
-    "cil_naive",
-    "cil_replay_raw",
-    "cil_replay_latent",
-    "raw_replay",
-    "latent_replay",
-}
-
-REPLAY_METHODS = {
-    "cil_replay_raw",
-    "cil_replay_latent",
-    "raw_replay",
-    "latent_replay",
-}
+from methods import SEQUENTIAL_METHODS, REPLAY_METHODS, DISTILLATION_METHODS
 
 
 def print_run_info(config, dataset_info, label_encoder, method, device):
@@ -28,7 +14,7 @@ def print_run_info(config, dataset_info, label_encoder, method, device):
     print(f"Classes: {[str(c) for c in label_encoder.classes_]}")
 
     if config["method"] in SEQUENTIAL_METHODS:
-        print(f"Task splits: {config['task_splits']}")
+        print(f"Task order: {config['task_order']}")
 
     if config["method"] in REPLAY_METHODS:
         balanced = config.get("balanced_replay", True)
@@ -37,9 +23,15 @@ def print_run_info(config, dataset_info, label_encoder, method, device):
               f"(size={config.get('replay_buffer_size', 1000)}, "
               f"batch={config.get('replay_batch_size', 32)})")
 
-        bal_loss = config.get("balanced_loss", True)
-        loss_type = "class-weighted CE" if bal_loss else "standard CE"
-        print(f"Loss function: {loss_type}")
+    bal_loss = config.get("balanced_loss", True)
+    loss_type = "class-weighted CE" if bal_loss else "standard CE"
+    print(f"Loss function: {loss_type}")
+
+    if config["method"] in DISTILLATION_METHODS:
+        use_distill = config.get("use_distillation", False)
+        if config["method"] == "cil_lwf" or use_distill:
+            print(f"Distillation: T={config.get('distill_temperature', 2.0)}, "
+                  f"weight={config.get('distill_weight', 1.0)}")
 
 
 def print_standard_epoch(epoch, total_epochs, train_metrics, test_metrics):
@@ -64,6 +56,8 @@ def print_sequential_epoch(task_id, num_tasks, epoch, total_epochs, train_metric
 
 
 def print_sequential_summary(task_results):
+    import numpy as np
+
     print("\n" + "=" * 80)
     print("Sequential Summary")
     for result in task_results:
@@ -73,6 +67,38 @@ def print_sequential_summary(task_results):
             f"Seen classes: {result['seen_classes']} | "
             f"Seen Acc: {result['seen_acc']:.4f}"
         )
+
+    num_tasks = len(task_results)
+
+    # Average Incremental Accuracy
+    aia = np.mean([r["seen_acc"] for r in task_results])
+
+    # Per-task forgetting: peak accuracy on task j minus final accuracy
+    forgetting = []
+    for j in range(num_tasks):
+        accs_j = [
+            r["per_task_acc"][j + 1]
+            for r in task_results
+            if (j + 1) in r.get("per_task_acc", {})
+        ]
+        if len(accs_j) >= 2:
+            forgetting.append(max(accs_j) - accs_j[-1])
+
+    avg_forgetting = np.mean(forgetting) if forgetting else 0.0
+
+    # Backward transfer: final_acc(j) - acc_right_after_learning(j)
+    bwt_vals = []
+    for j in range(num_tasks):
+        learned = task_results[j].get("per_task_acc", {}).get(j + 1)
+        final = task_results[-1].get("per_task_acc", {}).get(j + 1)
+        if learned is not None and final is not None and j < num_tasks - 1:
+            bwt_vals.append(final - learned)
+    avg_bwt = np.mean(bwt_vals) if bwt_vals else 0.0
+
+    print(f"\nCIL Metrics:")
+    print(f"  Average Incremental Accuracy (AIA): {aia:.4f}")
+    print(f"  Average Forgetting:                 {avg_forgetting:.4f}")
+    print(f"  Backward Transfer (BWT):            {avg_bwt:+.4f}")
 
 
 def print_classification_report_and_confusion(
@@ -113,7 +139,6 @@ def print_final_standard_results(best_test_acc, y_true, y_pred, label_encoder):
 
 
 def print_final_sequential_results(best_seen_acc, task_results, y_true, y_pred, label_encoder):
-    print_best_accuracy(best_seen_acc, sequential=True)
     print_sequential_summary(task_results)
     print_classification_report_and_confusion(
         y_true=y_true,
