@@ -1,15 +1,21 @@
 """
 Replay buffers for continual learning.
 
-Two strategies with identical APIs so they can be swapped via a single flag:
+Three strategies with compatible APIs so they can be swapped via a single flag:
 
-* ``ReservoirBuffer``      – class-agnostic reservoir sampling (original).
-* ``ClassBalancedBuffer``   – per-class partitioned buffer with stratified
-                              sampling (prevents majority-class domination).
+* ``ReservoirBuffer``      – class-agnostic reservoir sampling.
+* ``ClassBalancedBuffer``  – per-class partitioned buffer with stratified
+                             sampling (prevents majority-class domination).
+* ``HerdingBuffer``        – iCaRL-style herding: picks exemplars whose
+                             running mean best approximates the class mean
+                             embedding.  Requires a ``rebuild()`` call at
+                             the end of each task (see method end_task hooks).
 """
 
 import random
 from collections import defaultdict
+
+import torch
 
 
 # =====================================================================
@@ -180,11 +186,162 @@ class ClassBalancedBuffer:
 
 
 # =====================================================================
+#  HerdingBuffer
+# =====================================================================
+
+def _herding_select(embs: torch.Tensor, k: int) -> list[int]:
+    """
+    Greedy herding selection (iCaRL-style).
+
+    Iteratively picks the sample whose addition makes the running mean of
+    selected exemplars closest to the true class mean.
+
+    Parameters
+    ----------
+    embs : (N, D) float tensor of class embeddings.
+    k    : number of exemplars to select (clamped to N).
+
+    Returns
+    -------
+    List of selected indices into *embs* (length min(k, N)).
+    """
+    k = min(k, embs.size(0))
+    mean = embs.mean(dim=0)           # (D,)
+    selected: list[int] = []
+    running_sum = torch.zeros_like(mean)
+    remaining = list(range(embs.size(0)))
+
+    for step in range(k):
+        # Vectorised: compute candidate means for all remaining samples at once.
+        cand_embs = embs[remaining]                                    # (R, D)
+        cand_means = (running_sum.unsqueeze(0) + cand_embs) / (step + 1)  # (R, D)
+        dists = torch.norm(cand_means - mean.unsqueeze(0), dim=1)     # (R,)
+        best_local = int(dists.argmin().item())
+        best_global = remaining[best_local]
+
+        selected.append(best_global)
+        running_sum = running_sum + embs[best_global]
+        remaining.pop(best_local)
+
+    return selected
+
+
+class HerdingBuffer:
+    """
+    Fixed-capacity buffer that selects exemplars via iCaRL-style herding.
+
+    Workflow
+    --------
+    1. Call ``begin_task()`` at the start of each new task to reset the
+       staging area.
+    2. Call ``add_batch(samples, labels)`` during training — samples are
+       accumulated in a per-class staging list, not yet committed.
+    3. Call ``rebuild(max_per_class)`` at the end of the task.  This
+       deduplicates staged samples (safe with a frozen encoder), runs greedy
+       herding to select the best exemplars for new classes, and trims old
+       classes proportionally.
+
+    Each sample must be a tuple ``(embedding_tensor, label)`` so that
+    embedding distances can be computed during ``rebuild``.
+    Sampling returns the same tuple format, matching ``ClassBalancedBuffer``.
+    """
+
+    def __init__(self, total_size: int):
+        self.total_size = total_size
+        # Committed exemplars: {label: [(emb, label), ...]}
+        self._exemplars: dict[int, list] = {}
+        # Staging area for the current task: {label: [(emb, label), ...]}
+        self._staging: dict[int, list] = defaultdict(list)
+
+    @property
+    def num_classes(self) -> int:
+        return len(self._exemplars)
+
+    def __len__(self) -> int:
+        return sum(len(v) for v in self._exemplars.values())
+
+    # ------------------------------------------------------------------
+    #  Task lifecycle
+    # ------------------------------------------------------------------
+
+    def begin_task(self):
+        """Clear the staging area at the start of a new task."""
+        self._staging.clear()
+
+    def rebuild(self, max_per_class: int):
+        """
+        Commit exemplars for all staged (new) classes and trim old ones.
+
+        Parameters
+        ----------
+        max_per_class : target number of exemplars per class after rebuild
+                        (typically ``total_size // num_seen_classes``).
+        """
+        for label, candidates in self._staging.items():
+            # Deduplicate: frozen encoder → same input = identical embedding.
+            seen_keys: set[bytes] = set()
+            unique: list = []
+            for c in candidates:
+                key = c[0].numpy().tobytes()
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    unique.append(c)
+
+            embs = torch.stack([c[0] for c in unique])   # (N, D)
+            indices = _herding_select(embs, max_per_class)
+            self._exemplars[label] = [unique[i] for i in indices]
+
+        # Trim existing classes that were seen in earlier tasks.
+        for label in list(self._exemplars.keys()):
+            if label not in self._staging:
+                self._exemplars[label] = self._exemplars[label][:max_per_class]
+
+        self._staging.clear()
+
+    # ------------------------------------------------------------------
+    #  Add / Sample (same API as the other buffers)
+    # ------------------------------------------------------------------
+
+    def add_batch(self, samples: list, labels: list[int]):
+        """Accumulate samples into the staging area (not exemplars yet)."""
+        for sample, label in zip(samples, labels):
+            self._staging[label].append(sample)
+
+    def sample(self, batch_size: int) -> list:
+        """Stratified sample from committed exemplars (same as ClassBalancedBuffer)."""
+        if len(self) == 0 or batch_size <= 0:
+            return []
+
+        classes = list(self._exemplars.keys())
+        random.shuffle(classes)
+
+        base = batch_size // len(classes)
+        remainder = batch_size % len(classes)
+
+        selected = []
+        for i, cls in enumerate(classes):
+            buf = self._exemplars[cls]
+            n = min(base + (1 if i < remainder else 0), len(buf))
+            selected.extend(random.sample(buf, k=n))
+        return selected
+
+    def class_distribution(self) -> dict[int, int]:
+        """Return {class_label: num_exemplars} for inspection."""
+        return {cls: len(buf) for cls, buf in sorted(self._exemplars.items())}
+
+
+# =====================================================================
 #  Factory
 # =====================================================================
 
-def build_replay_buffer(total_size: int, balanced: bool = True):
-    """Return a ClassBalancedBuffer or ReservoirBuffer depending on *balanced*."""
+def build_replay_buffer(total_size: int, balanced: bool = True, herding: bool = False):
+    """
+    Return the appropriate replay buffer.
+
+    Priority: herding > balanced > reservoir.
+    """
+    if herding:
+        return HerdingBuffer(total_size)
     if balanced:
         return ClassBalancedBuffer(total_size)
     return ReservoirBuffer(total_size)

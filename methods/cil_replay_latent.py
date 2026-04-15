@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from methods.linear_probe import LinearProbeMethod
 from utils.losses import class_balanced_ce_loss, distillation_loss
-from utils.replay_buffers import build_replay_buffer
+from utils.replay_buffers import HerdingBuffer, build_replay_buffer
 
 
 class CILReplayLatentMethod(LinearProbeMethod):
@@ -41,6 +41,7 @@ class CILReplayLatentMethod(LinearProbeMethod):
         use_distillation=False,
         distill_temperature=2.0,
         distill_weight=1.0,
+        herding_replay=False,
     ):
         super().__init__(
             model_name=model_name,
@@ -53,6 +54,7 @@ class CILReplayLatentMethod(LinearProbeMethod):
         self.replay_batch_size = int(replay_batch_size)
         self.balanced_replay = balanced_replay
         self.balanced_loss = balanced_loss
+        self.herding_replay = herding_replay
 
         self.use_distillation = use_distillation
         self.distill_temperature = distill_temperature
@@ -61,7 +63,9 @@ class CILReplayLatentMethod(LinearProbeMethod):
         self._old_classes: list[int] = []
 
         self._buffer = build_replay_buffer(
-            total_size=self.replay_buffer_size, balanced=self.balanced_replay,
+            total_size=self.replay_buffer_size,
+            balanced=self.balanced_replay,
+            herding=self.herding_replay,
         )
 
     # ------------------------------------------------------------------
@@ -78,6 +82,17 @@ class CILReplayLatentMethod(LinearProbeMethod):
         else:
             self._old_head = None
             self._old_classes = []
+
+        if self.herding_replay:
+            self._buffer.begin_task()
+
+    def end_task(self, task_id, seen_classes):
+        if self.herding_replay:
+            max_per_class = max(1, self.replay_buffer_size // len(seen_classes))
+            self._buffer.rebuild(max_per_class)
+            dist = self._buffer.class_distribution()
+            print(f"  [Herding] Buffer rebuilt — {sum(dist.values())} exemplars "
+                  f"across {len(dist)} classes  (max {max_per_class}/class): {dist}")
 
     # ------------------------------------------------------------------
     # Buffer helpers

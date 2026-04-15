@@ -17,8 +17,14 @@ def print_run_info(config, dataset_info, label_encoder, method, device):
         print(f"Task order: {config['task_order']}")
 
     if config["method"] in REPLAY_METHODS:
+        herding = config.get("herding_replay", False)
         balanced = config.get("balanced_replay", True)
-        buf_type = "class-balanced" if balanced else "reservoir (class-agnostic)"
+        if herding:
+            buf_type = "herding (iCaRL exemplar selection)"
+        elif balanced:
+            buf_type = "class-balanced"
+        else:
+            buf_type = "reservoir (class-agnostic)"
         print(f"Replay buffer: {buf_type}  "
               f"(size={config.get('replay_buffer_size', 1000)}, "
               f"batch={config.get('replay_batch_size', 32)})")

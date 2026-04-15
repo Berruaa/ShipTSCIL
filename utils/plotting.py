@@ -38,6 +38,8 @@ METHOD_DISPLAY_NAMES = {
     "cil_replay_raw":    "CIL Raw Replay",
     "cil_replay_latent": "CIL Latent Replay",
     "cil_lwf":           "CIL LwF (Distill-only)",
+    "cil_ncm":           "CIL NCM",   # suffix added dynamically based on herding_replay
+    "cil_herding_ncm":   "CIL Herding+NCM (FastICARL-B)",
 }
 
 REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
@@ -46,14 +48,22 @@ REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
 def _pretty_method(method_name: str,
                    balanced_replay: bool | None = None,
                    balanced_loss: bool | None = None,
-                   use_distillation: bool | None = None) -> str:
+                   use_distillation: bool | None = None,
+                   herding_replay: bool | None = None) -> str:
     base = METHOD_DISPLAY_NAMES.get(method_name, method_name)
     tags = []
-    if method_name in REPLAY_METHODS:
-        if balanced_replay is not None:
+
+    if method_name == "cil_ncm":
+        # cil_ncm routes to Version A or B depending on herding_replay.
+        tags.append("FastICARL-B, Herding+NCM" if herding_replay else "FastICARL-A, full mean")
+    elif method_name in REPLAY_METHODS:
+        if herding_replay:
+            tags.append("Herding")
+        elif balanced_replay is not None:
             tags.append("Bal-Buf" if balanced_replay else "Reservoir")
         if balanced_loss is not None:
             tags.append("Bal-CE" if balanced_loss else "Std-CE")
+
     if use_distillation:
         tags.append("+Distill")
     if tags:
@@ -75,20 +85,22 @@ def _pretty_dataset(dataset_name: str) -> str:
 def _header(method_name: str, dataset_name: str,
             balanced_replay: bool | None = None,
             balanced_loss: bool | None = None,
-            use_distillation: bool | None = None) -> str:
+            use_distillation: bool | None = None,
+            herding_replay: bool | None = None) -> str:
     """Build a consistent 'Method — Dataset' header string."""
-    return (f"{_pretty_method(method_name, balanced_replay, balanced_loss, use_distillation)}"
+    return (f"{_pretty_method(method_name, balanced_replay, balanced_loss, use_distillation, herding_replay)}"
             f"  |  {_pretty_dataset(dataset_name)}")
 
 
 def _stamp_footer(fig, method_name: str, dataset_name: str,
                   balanced_replay: bool | None = None,
                   balanced_loss: bool | None = None,
-                  use_distillation: bool | None = None):
+                  use_distillation: bool | None = None,
+                  herding_replay: bool | None = None):
     """Add a small method + dataset footnote at the bottom-right of a figure."""
     fig.text(
         0.99, 0.005,
-        (f"Method: {_pretty_method(method_name, balanced_replay, balanced_loss, use_distillation)}"
+        (f"Method: {_pretty_method(method_name, balanced_replay, balanced_loss, use_distillation, herding_replay)}"
          f"    Dataset: {_pretty_dataset(dataset_name)}"),
         ha="right", va="bottom", fontsize=7, color="grey", style="italic",
     )
@@ -102,7 +114,8 @@ def plot_training_curves(history: dict, save_path, *,
                          method_name: str = "", dataset_name: str = "",
                          balanced_replay: bool | None = None,
                          balanced_loss: bool | None = None,
-                         use_distillation: bool | None = None):
+                         use_distillation: bool | None = None,
+                         herding_replay: bool | None = None):
     """
     Plot loss and accuracy curves for standard (joint) training.
     """
@@ -134,9 +147,9 @@ def plot_training_curves(history: dict, save_path, *,
     ax_acc.grid(alpha=0.3)
 
     fig.suptitle(
-        f"Training Curves — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)}",
+        f"Training Curves — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)}",
         fontsize=14, y=1.02)
-    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)
+    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)
     fig.tight_layout()
     fig.savefig(save_path)
     plt.close(fig)
@@ -146,7 +159,8 @@ def plot_sequential_training_curves(history: dict, save_path, *,
                                     method_name: str = "", dataset_name: str = "",
                                     balanced_replay: bool | None = None,
                                     balanced_loss: bool | None = None,
-                                    use_distillation: bool | None = None):
+                                    use_distillation: bool | None = None,
+                                    herding_replay: bool | None = None):
     """
     Plot loss and accuracy curves for sequential (CIL) training.
     """
@@ -186,10 +200,10 @@ def plot_sequential_training_curves(history: dict, save_path, *,
         ax_acc.grid(alpha=0.3)
 
     fig.suptitle(
-        f"Sequential Training Curves — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)}",
+        f"Sequential Training Curves — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)}",
         fontsize=14, y=1.01,
     )
-    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)
+    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)
     fig.tight_layout()
     fig.savefig(save_path)
     plt.close(fig)
@@ -203,7 +217,8 @@ def plot_task_accuracy_progression(task_results: list[dict], save_path, *,
                                    method_name: str = "", dataset_name: str = "",
                                    balanced_replay: bool | None = None,
                                    balanced_loss: bool | None = None,
-                                   use_distillation: bool | None = None):
+                                   use_distillation: bool | None = None,
+                                   herding_replay: bool | None = None):
     """
     Bar + line chart showing seen-class accuracy after each task.
 
@@ -230,13 +245,13 @@ def plot_task_accuracy_progression(task_results: list[dict], save_path, *,
     ax.set_xlabel("Task")
     ax.set_ylabel("Seen-class Test Accuracy")
     ax.set_title(
-        f"Accuracy Progression — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)}",
+        f"Accuracy Progression — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)}",
         fontsize=13,
     )
     ax.set_ylim(0, 1.12)
     ax.grid(axis="y", alpha=0.3)
 
-    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)
+    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)
     fig.tight_layout()
     fig.savefig(save_path)
     plt.close(fig)
@@ -251,12 +266,13 @@ def plot_confusion_matrix(y_true, y_pred, class_names: list[str], save_path, *,
                           balanced_replay: bool | None = None,
                           balanced_loss: bool | None = None,
                           use_distillation: bool | None = None,
+                          herding_replay: bool | None = None,
                           title: str | None = None):
     """
     Annotated confusion-matrix heatmap.
     """
     if title is None:
-        title = f"Confusion Matrix — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)}"
+        title = f"Confusion Matrix — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)}"
 
     cm = confusion_matrix(y_true, y_pred)
     n = len(class_names)
@@ -283,7 +299,7 @@ def plot_confusion_matrix(y_true, y_pred, class_names: list[str], save_path, *,
     ax.set_ylabel("True")
     ax.set_title(title, fontsize=12)
 
-    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)
+    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)
     fig.tight_layout()
     fig.savefig(save_path)
     plt.close(fig)
@@ -298,12 +314,13 @@ def plot_per_class_accuracy(y_true, y_pred, class_names: list[str], save_path, *
                             balanced_replay: bool | None = None,
                             balanced_loss: bool | None = None,
                             use_distillation: bool | None = None,
+                            herding_replay: bool | None = None,
                             title: str | None = None):
     """
     Horizontal bar chart of per-class accuracy.
     """
     if title is None:
-        title = f"Per-Class Accuracy — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)}"
+        title = f"Per-Class Accuracy — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)}"
 
     cm = confusion_matrix(y_true, y_pred)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -333,7 +350,7 @@ def plot_per_class_accuracy(y_true, y_pred, class_names: list[str], save_path, *
     ax.grid(axis="x", alpha=0.3)
     ax.invert_yaxis()
 
-    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)
+    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)
     fig.tight_layout()
     fig.savefig(save_path)
     plt.close(fig)
@@ -363,7 +380,8 @@ def plot_forgetting_analysis(task_results, save_path, *,
                              method_name: str = "", dataset_name: str = "",
                              balanced_replay: bool | None = None,
                              balanced_loss: bool | None = None,
-                             use_distillation: bool | None = None):
+                             use_distillation: bool | None = None,
+                             herding_replay: bool | None = None):
     """
     CIL-specific analysis page:
 
@@ -454,10 +472,10 @@ def plot_forgetting_analysis(task_results, save_path, *,
     )
 
     fig.suptitle(
-        f"Forgetting Analysis — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)}",
+        f"Forgetting Analysis — {_header(method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)}",
         fontsize=14, y=1.02,
     )
-    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation)
+    _stamp_footer(fig, method_name, dataset_name, balanced_replay, balanced_loss, use_distillation, herding_replay)
     fig.tight_layout()
     fig.savefig(save_path)
     plt.close(fig)
@@ -474,6 +492,7 @@ def _plot_kwargs(config):
         balanced_replay=config.get("balanced_replay"),
         balanced_loss=config.get("balanced_loss"),
         use_distillation=config.get("use_distillation"),
+        herding_replay=config.get("herding_replay", False),
     )
 
 

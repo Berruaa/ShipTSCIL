@@ -4,7 +4,7 @@ from tqdm import tqdm
 
 from methods.linear_probe import LinearProbeMethod
 from utils.losses import class_balanced_ce_loss
-from utils.replay_buffers import build_replay_buffer
+from utils.replay_buffers import HerdingBuffer, build_replay_buffer
 
 
 class CILReplayRawMethod(LinearProbeMethod):
@@ -30,6 +30,7 @@ class CILReplayRawMethod(LinearProbeMethod):
         replay_batch_size=32,
         balanced_replay=True,
         balanced_loss=True,
+        herding_replay=False,
     ):
         super().__init__(
             model_name=model_name,
@@ -42,11 +43,33 @@ class CILReplayRawMethod(LinearProbeMethod):
         self.replay_batch_size = int(replay_batch_size)
         self.balanced_replay = balanced_replay
         self.balanced_loss = balanced_loss
+        self.herding_replay = herding_replay
 
         self._buffer = build_replay_buffer(
-            total_size=self.replay_buffer_size, balanced=self.balanced_replay,
+            total_size=self.replay_buffer_size,
+            balanced=self.balanced_replay,
+            herding=self.herding_replay,
         )
         self._buffer_is_embeddings = False
+
+    # ------------------------------------------------------------------
+    # Task lifecycle
+    # ------------------------------------------------------------------
+
+    def begin_task(self, task_id, task_classes, old_classes):
+        if self.herding_replay:
+            self._buffer.begin_task()
+
+    def end_task(self, task_id, seen_classes):
+        if self.herding_replay and self._buffer_is_embeddings:
+            max_per_class = max(1, self.replay_buffer_size // len(seen_classes))
+            self._buffer.rebuild(max_per_class)
+            dist = self._buffer.class_distribution()
+            print(f"  [Herding] Buffer rebuilt — {sum(dist.values())} exemplars "
+                  f"across {len(dist)} classes  (max {max_per_class}/class): {dist}")
+        elif self.herding_replay and not self._buffer_is_embeddings:
+            print("  [Herding] Skipped: herding requires precomputed embeddings "
+                  "(raw time-series path detected).")
 
     # ------------------------------------------------------------------
     # Buffer helpers

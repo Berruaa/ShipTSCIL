@@ -33,10 +33,13 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 # ======================================================================
 CONFIG = {
     # ── What to run ───────────────────────────────────────────────
-    # Methods: svm, linear_probe, cil_naive,
-    #          cil_replay_raw, cil_replay_latent, cil_lwf
-    "method":     "cil_replay_latent",
-    "dataset":    "walking_sitting_standing",
+    # Methods: svm, linear_probe,
+    # cil_naive,
+    # cil_replay_raw, cil_replay_latent,
+    # cil_lwf (Distillation),
+    # cil_ncm  (FastICARL — NCM (default); Herding+NCM when herding_replay=True)
+    "method":     "cil_ncm",
+    "dataset":    "uwave_gesture_library",
     "model_name": "AutonLab/MOMENT-1-base",
 
     # Set to file paths to override the dataset registry lookup.
@@ -61,12 +64,18 @@ CONFIG = {
     "replay_buffer_size": "auto",  # override: set an int to bypass pct
     "replay_batch_size":  "auto",  # override: set an int to bypass auto
     "balanced_replay":    True,    # class-balanced vs reservoir
+    "herding_replay":     True,   # iCaRL herding exemplar selection (overrides balanced_replay)
 
-    # ── Loss & distillation ───────────────────────────────────────
+    # ── Loss ─────────────────────────────────────────────────────
     "balanced_loss":       True,   # class-weighted CE vs standard CE
-    "use_distillation":    False,  # add KD loss (cil_replay_latent only)
+
+    # ── Distillation (cil_lwf / cil_replay_latent only) ──────────
+    "use_distillation":    False,
     "distill_temperature": 2.0,
     "distill_weight":      1.0,
+
+    # ── Output controls ────────────────────────────────────────────
+    "save_results":        False,   # save plots/figures under results/
 }
 
 
@@ -90,6 +99,12 @@ def main():
 
     num_classes = len(label_encoder.classes_)
     auto_configure(CONFIG, n_train=len(train_dataset), num_classes=num_classes)
+
+    # Methods that do no per-epoch learning only need a single pass.
+    _SINGLE_EPOCH_METHODS = {"svm", "cil_ncm", "ncm", "cil_herding_ncm", "herding_ncm"}
+    if CONFIG["method"] in _SINGLE_EPOCH_METHODS and CONFIG.get("epochs") != 1:
+        print(f"Auto-setting epochs=1 for '{CONFIG['method']}' (no per-epoch learning).")
+        CONFIG["epochs"] = 1
 
     # ── Task order (sequential methods only) ──────────────────────
     if CONFIG["method"] in SEQUENTIAL_METHODS:
@@ -119,6 +134,7 @@ def main():
         use_distillation=CONFIG.get("use_distillation", False),
         distill_temperature=CONFIG.get("distill_temperature", 2.0),
         distill_weight=CONFIG.get("distill_weight", 1.0),
+        herding_replay=CONFIG.get("herding_replay", False),
     )
 
     print_run_info(
@@ -142,8 +158,12 @@ def main():
     print("Done.\n")
 
     class_names = [str(c) for c in label_encoder.classes_]
-    run_dir = _make_run_dir(CONFIG)
-    print(f"Results will be saved to: {run_dir}\n")
+    save_results = CONFIG.get("save_results", True)
+    run_dir = _make_run_dir(CONFIG) if save_results else None
+    if save_results:
+        print(f"Results will be saved to: {run_dir}\n")
+    else:
+        print("Result saving disabled (CONFIG['save_results']=False).\n")
 
     # ── Standard methods (svm, linear_probe) ──────────────────────
     if CONFIG["method"] in STANDARD_METHODS:
@@ -158,7 +178,8 @@ def main():
         method.load(checkpoint_path)
         y_true, y_pred = collect_predictions(method, test_loader, device=DEVICE)
         print_final_standard_results(best_test_acc, y_true, y_pred, label_encoder)
-        save_standard_plots(history, y_true, y_pred, class_names, run_dir, CONFIG)
+        if save_results:
+            save_standard_plots(history, y_true, y_pred, class_names, run_dir, CONFIG)
         return
 
     # ── Sequential methods (cil_*) ────────────────────────────────
@@ -178,7 +199,8 @@ def main():
 
         y_true, y_pred = collect_predictions(method, final_loader, device=DEVICE)
         print_final_sequential_results(best_seen_acc, task_results, y_true, y_pred, label_encoder)
-        save_sequential_plots(history, task_results, y_true, y_pred, class_names, run_dir, CONFIG)
+        if save_results:
+            save_sequential_plots(history, task_results, y_true, y_pred, class_names, run_dir, CONFIG)
         return
 
     raise ValueError(f"Unsupported method: {CONFIG['method']}")
