@@ -5,10 +5,11 @@ from methods.cil_replay_latent import CILReplayLatentMethod
 from methods.cil_lwf import CILLwFMethod
 from methods.cil_ncm import CILNCMMethod
 from methods.cil_herding_ncm import CILHerdingNCMMethod
+from methods.cil_olora import CILOLoRAMethod
 from methods.svm import SVMMethod
 
 STANDARD_METHODS = {"linear_probe", "svm"}
-SEQUENTIAL_METHODS = {"cil_naive", "cil_replay_raw", "cil_replay_latent", "cil_lwf", "cil_ncm", "cil_herding_ncm"}
+SEQUENTIAL_METHODS = {"cil_naive", "cil_replay_raw", "cil_replay_latent", "cil_lwf", "cil_ncm", "cil_herding_ncm", "cil_olora"}
 REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
 DISTILLATION_METHODS = {"cil_lwf", "cil_replay_latent"}
 
@@ -18,6 +19,8 @@ _LORA_INCOMPATIBLE = {
     "cil_ncm", "ncm",
     "cil_herding_ncm", "herding_ncm",
 }
+
+_OLORA_METHODS = {"cil_olora"}
 
 
 def build_method(
@@ -42,6 +45,12 @@ def build_method(
             f"LoRA is incompatible with method '{method_name}'. "
             f"LoRA requires gradient-based training with raw time-series data. "
             f"Compatible methods: linear_probe, cil_naive, cil_replay_raw, cil_lwf."
+        )
+
+    if method_name in _OLORA_METHODS and not (lora_config and lora_config.get("olora")):
+        raise ValueError(
+            f"Method '{method_name}' requires O-LoRA. "
+            f"Set use_olora=True in config."
         )
 
     if method_name == "linear_probe":
@@ -145,6 +154,17 @@ def build_method(
             device=device,
             lr=lr,
             replay_buffer_size=replay_buffer_size,
+        )
+
+    if method_name in {"cil_olora", "olora"}:
+        return CILOLoRAMethod(
+            model_name=model_name,
+            num_classes=num_classes,
+            train_dataset=train_dataset,
+            device=device,
+            lr=lr,
+            olora_config=lora_config,
+            balanced_loss=balanced_loss,
         )
 
     raise ValueError(f"Unknown method: {method_name}")

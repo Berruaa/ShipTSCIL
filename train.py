@@ -38,8 +38,8 @@ CONFIG = {
     # cil_replay_raw, cil_replay_latent,
     # cil_lwf (Distillation),
     # cil_ncm  (FastICARL — NCM (default); Herding+NCM when herding_replay=True)
-    "method":     "cil_replay_latent",
-    "dataset":    "insect_sound",
+    "method":     "cil_replay_raw",
+    "dataset":    "ethanol_level",
     "model_name": "AutonLab/MOMENT-1-base",
 
     # Set to file paths to override the dataset registry lookup.
@@ -48,7 +48,7 @@ CONFIG = {
 
     # ── Training ("auto" = derived from dataset size) ─────────────
     "batch_size": "auto",
-    "epochs":     "auto",
+    "epochs":     50,
     "lr":         "auto",
     "seed":       42,
     "num_workers": 0,
@@ -92,6 +92,16 @@ CONFIG = {
     "lora_target_modules": None,   # default: ["q", "v"] (T5 attention)
     "lora_dropout":        0.05,
     "lora_lr":             "auto", # see above for auto logic
+
+    # ── O-LoRA (orthogonal LoRA for continual learning) ──────────
+    # Wang et al. (2023) "Orthogonal Subspace Learning for Language
+    # Model Continual Learning".  Each task gets its own LoRA adapters;
+    # previous adapters are frozen and an orthogonality loss prevents
+    # interference.  No replay or distillation needed.
+    # Set method to "cil_olora" and use_olora to True.
+    # Inherits lora_rank, lora_alpha, lora_target_modules, lora_dropout.
+    "use_olora":           True,
+    "olora_lambda":        1.0,    # weight of orthogonality loss
 
     # ── Output controls ────────────────────────────────────────────
     "save_results":        False,   # save plots/figures under results/
@@ -138,9 +148,22 @@ def main():
             print(f"Auto-generated task_order: {CONFIG['task_order']}")
         validate_task_order(CONFIG["task_order"], num_classes)
 
-    # ── LoRA config ──────────────────────────────────────────────
+    # ── LoRA / O-LoRA config ─────────────────────────────────────
     lora_config = None
-    if CONFIG.get("use_lora", False):
+    use_olora = CONFIG.get("use_olora", False)
+    if use_olora:
+        CONFIG["use_lora"] = True
+        lora_config = {
+            "enabled":        True,
+            "olora":          True,
+            "rank":           CONFIG.get("lora_rank", 8),
+            "alpha":          CONFIG.get("lora_alpha", 16),
+            "target_modules": CONFIG.get("lora_target_modules"),
+            "dropout":        CONFIG.get("lora_dropout", 0.05),
+            "lr":             CONFIG.get("lora_lr", CONFIG["lr"] * 0.2),
+            "olora_lambda":   CONFIG.get("olora_lambda", 1.0),
+        }
+    elif CONFIG.get("use_lora", False):
         lora_config = {
             "enabled":        True,
             "rank":           CONFIG.get("lora_rank", 8),
