@@ -39,7 +39,7 @@ CONFIG = {
     # cil_lwf (Distillation),
     # cil_ncm  (FastICARL — NCM (default); Herding+NCM when herding_replay=True)
     "method":     "cil_replay_latent",
-    "dataset":    "wisdm",
+    "dataset":    "insect_sound",
     "model_name": "AutonLab/MOMENT-1-base",
 
     # Set to file paths to override the dataset registry lookup.
@@ -190,7 +190,7 @@ def main():
             cache_dir=CACHE_DIR, dataset_name=CONFIG["dataset"],
             model_name=CONFIG["model_name"],
         )
-        print("\nPreparing embeddings …")
+        print(f"\nPreparing embeddings … (device: {DEVICE})")
         if CONFIG["method"] != "cil_replay_raw":
             train_dataset = precompute_embeddings(encoder, train_dataset, split="train", **emb_kwargs)
         test_dataset = precompute_embeddings(encoder, test_dataset, split="test", **emb_kwargs)
