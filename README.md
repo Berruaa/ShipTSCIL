@@ -84,7 +84,7 @@ ShipTSCIL/
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11
 - A CUDA-capable GPU is recommended but not required (CPU fallback is automatic)
 
 ### Installation
@@ -92,8 +92,8 @@ ShipTSCIL/
 ```bash
 git clone <repo-url> ShipTSCIL
 cd ShipTSCIL
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121   # or cpu
-pip install momentfm scikit-learn numpy tqdm matplotlib joblib
+pip install momentfm   # installs torch, numpy, scikit-learn, etc. as dependencies
+pip install matplotlib tqdm joblib
 ```
 
 ### Dataset preparation
