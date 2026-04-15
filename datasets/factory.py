@@ -24,8 +24,6 @@ DATASET_REGISTRY = {
         "train": "WalkingSittingStanding_TRAIN.ts",
         "test": "WalkingSittingStanding_TEST.ts",
     },
-    # WISDM: 3 phone-accel channels × 200 time-steps, 18 activity classes.
-    # Run  python datasets/convert_wisdm.py  once to generate the .ts files.
     "wisdm": {
         "train": "WISDM_TRAIN.ts",
         "test": "WISDM_TEST.ts",
