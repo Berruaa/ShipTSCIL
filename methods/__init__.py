@@ -12,6 +12,13 @@ SEQUENTIAL_METHODS = {"cil_naive", "cil_replay_raw", "cil_replay_latent", "cil_l
 REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
 DISTILLATION_METHODS = {"cil_lwf", "cil_replay_latent"}
 
+_LORA_INCOMPATIBLE = {
+    "cil_replay_latent", "latent_replay",
+    "svm",
+    "cil_ncm", "ncm",
+    "cil_herding_ncm", "herding_ncm",
+}
+
 
 def build_method(
     method_name,
@@ -28,7 +35,15 @@ def build_method(
     distill_temperature=2.0,
     distill_weight=1.0,
     herding_replay=False,
+    lora_config=None,
 ):
+    if lora_config and lora_config.get("enabled") and method_name in _LORA_INCOMPATIBLE:
+        raise ValueError(
+            f"LoRA is incompatible with method '{method_name}'. "
+            f"LoRA requires gradient-based training with raw time-series data. "
+            f"Compatible methods: linear_probe, cil_naive, cil_replay_raw, cil_lwf."
+        )
+
     if method_name == "linear_probe":
         return LinearProbeMethod(
             model_name=model_name,
@@ -36,6 +51,7 @@ def build_method(
             train_dataset=train_dataset,
             device=device,
             lr=lr,
+            lora_config=lora_config,
         )
 
     if method_name == "svm":
@@ -54,6 +70,7 @@ def build_method(
             train_dataset=train_dataset,
             device=device,
             lr=lr,
+            lora_config=lora_config,
         )
 
     if method_name in {"cil_replay_raw", "raw_replay"}:
@@ -68,6 +85,7 @@ def build_method(
             balanced_replay=balanced_replay,
             balanced_loss=balanced_loss,
             herding_replay=herding_replay,
+            lora_config=lora_config,
         )
 
     if method_name in {"cil_replay_latent", "latent_replay"}:
@@ -85,6 +103,7 @@ def build_method(
             distill_temperature=distill_temperature,
             distill_weight=distill_weight,
             herding_replay=herding_replay,
+            lora_config=lora_config,
         )
 
     if method_name in {"cil_lwf", "lwf"}:
@@ -97,6 +116,7 @@ def build_method(
             distill_temperature=distill_temperature,
             distill_weight=distill_weight,
             balanced_loss=balanced_loss,
+            lora_config=lora_config,
         )
 
     if method_name in {"cil_ncm", "ncm"}:

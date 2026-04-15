@@ -38,8 +38,8 @@ CONFIG = {
     # cil_replay_raw, cil_replay_latent,
     # cil_lwf (Distillation),
     # cil_ncm  (FastICARL — NCM (default); Herding+NCM when herding_replay=True)
-    "method":     "cil_ncm",
-    "dataset":    "uwave_gesture_library",
+    "method":     "cil_replay_latent",
+    "dataset":    "wisdm",
     "model_name": "AutonLab/MOMENT-1-base",
 
     # Set to file paths to override the dataset registry lookup.
@@ -73,6 +73,25 @@ CONFIG = {
     "use_distillation":    False,
     "distill_temperature": 2.0,
     "distill_weight":      1.0,
+
+    # ── LoRA (parameter-efficient fine-tuning of backbone) ─────────
+    # When enabled the MOMENT encoder receives low-rank adapters on
+    # selected attention projections.  All original weights stay frozen.
+    # Compatible methods: linear_probe, cil_naive, cil_replay_raw, cil_lwf.
+    #
+    # When use_lora is True, "auto" values above are adjusted:
+    #   lr:       2e-4 (vs 5e-4 frozen) — more conservative head LR
+    #   lora_lr:  auto = 0.2× head LR; 0.1× on small tasks (<200 samples)
+    #   epochs:   ceiling 60 (vs 100), target 150 grad-steps (vs 200)
+    #   batch_size: floor 16 (vs 8) — stabilises encoder gradients
+    #   replay_buffer_size: 1.5× larger (cap 8000 vs 5000)
+    #   replay_batch_size:  75% of batch (vs 50%)
+    "use_lora":            False,
+    "lora_rank":           8,
+    "lora_alpha":          16,
+    "lora_target_modules": None,   # default: ["q", "v"] (T5 attention)
+    "lora_dropout":        0.05,
+    "lora_lr":             "auto", # see above for auto logic
 
     # ── Output controls ────────────────────────────────────────────
     "save_results":        False,   # save plots/figures under results/
@@ -119,6 +138,18 @@ def main():
             print(f"Auto-generated task_order: {CONFIG['task_order']}")
         validate_task_order(CONFIG["task_order"], num_classes)
 
+    # ── LoRA config ──────────────────────────────────────────────
+    lora_config = None
+    if CONFIG.get("use_lora", False):
+        lora_config = {
+            "enabled":        True,
+            "rank":           CONFIG.get("lora_rank", 8),
+            "alpha":          CONFIG.get("lora_alpha", 16),
+            "target_modules": CONFIG.get("lora_target_modules"),
+            "dropout":        CONFIG.get("lora_dropout", 0.05),
+            "lr":             CONFIG.get("lora_lr", CONFIG["lr"] * 0.2),
+        }
+
     # ── Build method ──────────────────────────────────────────────
     method = build_method(
         method_name=CONFIG["method"],
@@ -135,6 +166,7 @@ def main():
         distill_temperature=CONFIG.get("distill_temperature", 2.0),
         distill_weight=CONFIG.get("distill_weight", 1.0),
         herding_replay=CONFIG.get("herding_replay", False),
+        lora_config=lora_config,
     )
 
     print_run_info(
@@ -143,19 +175,26 @@ def main():
     )
 
     # ── Precompute embeddings (cached to disk) ────────────────────
-    # cil_replay_raw needs the original time series for its replay
-    # buffer, so we only precompute the training set for other methods.
-    encoder = getattr(method, "encoder", None) or method.model.encoder
-    emb_kwargs = dict(
-        device=DEVICE, batch_size=CONFIG["batch_size"],
-        cache_dir=CACHE_DIR, dataset_name=CONFIG["dataset"],
-        model_name=CONFIG["model_name"],
-    )
-    print("\nPreparing embeddings …")
-    if CONFIG["method"] != "cil_replay_raw":
-        train_dataset = precompute_embeddings(encoder, train_dataset, split="train", **emb_kwargs)
-    test_dataset = precompute_embeddings(encoder, test_dataset, split="test", **emb_kwargs)
-    print("Done.\n")
+    # When LoRA is active the encoder is trainable — embeddings change
+    # every step, so precomputation (and caching) must be skipped entirely.
+    # Without LoRA, cil_replay_raw still needs raw training series for
+    # its replay buffer; all other frozen-encoder methods precompute.
+    use_lora = CONFIG.get("use_lora", False)
+    if use_lora:
+        print("\nLoRA enabled — skipping embedding precomputation "
+              "(encoder is trainable).\n")
+    else:
+        encoder = getattr(method, "encoder", None) or method.model.encoder
+        emb_kwargs = dict(
+            device=DEVICE, batch_size=CONFIG["batch_size"],
+            cache_dir=CACHE_DIR, dataset_name=CONFIG["dataset"],
+            model_name=CONFIG["model_name"],
+        )
+        print("\nPreparing embeddings …")
+        if CONFIG["method"] != "cil_replay_raw":
+            train_dataset = precompute_embeddings(encoder, train_dataset, split="train", **emb_kwargs)
+        test_dataset = precompute_embeddings(encoder, test_dataset, split="test", **emb_kwargs)
+        print("Done.\n")
 
     class_names = [str(c) for c in label_encoder.classes_]
     save_results = CONFIG.get("save_results", True)

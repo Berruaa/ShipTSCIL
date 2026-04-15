@@ -6,14 +6,30 @@ from models.model import MomentModel
 
 
 class BaseMethod:
-    def __init__(self, model_name, num_classes, train_dataset, device="cpu", lr=1e-3):
+    def __init__(self, model_name, num_classes, train_dataset, device="cpu", lr=1e-3,
+                 lora_config=None):
         self.model_name = model_name
         self.num_classes = num_classes
         self.train_dataset = train_dataset
         self.device = device
         self.lr = lr
 
-        self.encoder = FrozenMomentEncoder(model_name=model_name).to(device)
+        # ── Encoder selection (frozen vs LoRA) ────────────────────────
+        self._lora_enabled = bool(lora_config and lora_config.get("enabled"))
+        if self._lora_enabled:
+            from models.lora import LoRAMomentEncoder
+            self.encoder = LoRAMomentEncoder(
+                model_name=model_name,
+                lora_rank=lora_config.get("rank", 8),
+                lora_alpha=lora_config.get("alpha", 16),
+                lora_target_modules=lora_config.get("target_modules"),
+                lora_dropout=lora_config.get("dropout", 0.05),
+            ).to(device)
+            self.lora_lr = lora_config.get("lr", lr * 0.2)
+        else:
+            self.encoder = FrozenMomentEncoder(model_name=model_name).to(device)
+            self.lora_lr = None
+
         self.embedding_dim = self._infer_embedding_dim(train_dataset)
         self.head = LinearClassifier(
             in_dim=self.embedding_dim,

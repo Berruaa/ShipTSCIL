@@ -16,9 +16,19 @@ DATASET_REGISTRY = {
         "train": "UWaveGestureLibrary_TRAIN.ts",
         "test": "UWaveGestureLibrary_TEST.ts",
     },
+    "uci_har": {
+        "train": "UCIHAR_TRAIN.ts",
+        "test": "UCIHAR_TEST.ts",
+    },
     "walking_sitting_standing": {
         "train": "WalkingSittingStanding_TRAIN.ts",
         "test": "WalkingSittingStanding_TEST.ts",
+    },
+    # WISDM: 3 phone-accel channels × 200 time-steps, 18 activity classes.
+    # Run  python datasets/convert_wisdm.py  once to generate the .ts files.
+    "wisdm": {
+        "train": "WISDM_TRAIN.ts",
+        "test": "WISDM_TEST.ts",
     },
 }
 

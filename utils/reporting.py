@@ -33,6 +33,14 @@ def print_run_info(config, dataset_info, label_encoder, method, device):
     loss_type = "class-weighted CE" if bal_loss else "standard CE"
     print(f"Loss function: {loss_type}")
 
+    if config.get("use_lora"):
+        modules = config.get("lora_target_modules") or ["q", "v"]
+        print(f"LoRA: rank={config.get('lora_rank', 8)}, "
+              f"alpha={config.get('lora_alpha', 16)}, "
+              f"target={modules}, "
+              f"lr={config.get('lora_lr', 'auto')}, "
+              f"dropout={config.get('lora_dropout', 0.05)}")
+
     if config["method"] in DISTILLATION_METHODS:
         use_distill = config.get("use_distillation", False)
         if config["method"] == "cil_lwf" or use_distill:

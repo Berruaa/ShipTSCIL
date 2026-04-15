@@ -42,6 +42,7 @@ class CILReplayLatentMethod(LinearProbeMethod):
         distill_temperature=2.0,
         distill_weight=1.0,
         herding_replay=False,
+        lora_config=None,
     ):
         super().__init__(
             model_name=model_name,
@@ -49,6 +50,7 @@ class CILReplayLatentMethod(LinearProbeMethod):
             train_dataset=train_dataset,
             device=device,
             lr=lr,
+            lora_config=lora_config,
         )
         self.replay_buffer_size = int(replay_buffer_size)
         self.replay_batch_size = int(replay_batch_size)

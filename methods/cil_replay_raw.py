@@ -31,6 +31,7 @@ class CILReplayRawMethod(LinearProbeMethod):
         balanced_replay=True,
         balanced_loss=True,
         herding_replay=False,
+        lora_config=None,
     ):
         super().__init__(
             model_name=model_name,
@@ -38,6 +39,7 @@ class CILReplayRawMethod(LinearProbeMethod):
             train_dataset=train_dataset,
             device=device,
             lr=lr,
+            lora_config=lora_config,
         )
         self.replay_buffer_size = int(replay_buffer_size)
         self.replay_batch_size = int(replay_batch_size)

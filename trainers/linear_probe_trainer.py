@@ -3,12 +3,16 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 
-def _unpack_batch(batch, model, device):
+def _unpack_batch(batch, model, device, allow_grad=False):
     """Return (embeddings, labels) regardless of batch format.
 
     Accepts either precomputed 2-tuples ``(embedding, y)`` or raw
     3-tuples ``(x, mask, y)`` (the encoder is called on-the-fly for the
     latter, though this path should rarely be hit after precomputation).
+
+    When *allow_grad* is True the encoder forward pass retains the
+    computation graph so that gradients can reach trainable encoder
+    parameters (e.g. LoRA adapters).
     """
     if len(batch) == 2:
         emb, y = batch
@@ -17,14 +21,19 @@ def _unpack_batch(batch, model, device):
     x, mask, y = batch
     x = x.to(device).float()
     mask = mask.to(device)
-    with torch.no_grad():
+    if allow_grad:
         emb = model.encoder(x, mask)
+    else:
+        with torch.no_grad():
+            emb = model.encoder(x, mask)
     return emb, y.to(device)
 
 
 def train_one_epoch(model, dataloader, optimizer, device="cpu"):
     model.train()
     model.encoder.eval()
+
+    encoder_trainable = any(p.requires_grad for p in model.encoder.parameters())
 
     total_loss = 0.0
     total_correct = 0
@@ -37,7 +46,7 @@ def train_one_epoch(model, dataloader, optimizer, device="cpu"):
         leave=False,
         disable=True,
     ):
-        emb, batch_y = _unpack_batch(batch, model, device)
+        emb, batch_y = _unpack_batch(batch, model, device, allow_grad=encoder_trainable)
 
         optimizer.zero_grad()
         logits = model.head(emb)

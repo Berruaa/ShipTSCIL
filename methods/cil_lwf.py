@@ -36,6 +36,7 @@ class CILLwFMethod(LinearProbeMethod):
         distill_temperature=2.0,
         distill_weight=1.0,
         balanced_loss=True,
+        lora_config=None,
     ):
         super().__init__(
             model_name=model_name,
@@ -43,6 +44,7 @@ class CILLwFMethod(LinearProbeMethod):
             train_dataset=train_dataset,
             device=device,
             lr=lr,
+            lora_config=lora_config,
         )
         self.distill_temperature = distill_temperature
         self.distill_weight = distill_weight
@@ -95,8 +97,11 @@ class CILLwFMethod(LinearProbeMethod):
                 batch_x, batch_mask, batch_y = batch
                 batch_x = batch_x.to(self.device).float()
                 batch_mask = batch_mask.to(self.device)
-                with torch.no_grad():
+                if self._lora_enabled:
                     embeddings = self.model.encoder(batch_x, batch_mask)
+                else:
+                    with torch.no_grad():
+                        embeddings = self.model.encoder(batch_x, batch_mask)
             batch_y = batch_y.to(self.device)
 
             logits = self.model.head(embeddings)
