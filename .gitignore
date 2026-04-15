@@ -2,6 +2,10 @@ checkpoints/
 results/
 embeddings_cache/
 
+# Large dataset files
+data/InsectSound_TRAIN.ts
+data/InsectSound_TEST.ts
+
 __pycache__/
 *.pyc
 *.pyo
