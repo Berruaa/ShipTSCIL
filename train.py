@@ -19,6 +19,7 @@ from pipelines import (
 from utils.seed import set_seed
 from utils.reporting import print_final_sequential_results, print_final_standard_results, print_run_info
 from utils.plotting import save_standard_plots, save_sequential_plots
+from utils.results_logger import append_run, build_standard_result, build_sequential_result
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -48,7 +49,7 @@ CONFIG = {
 
     # ── Training ("auto" = derived from dataset size) ─────────────
     "batch_size": "auto",
-    "epochs":     50,
+    "epochs":     "auto",
     "lr":         "auto",
     "seed":       42,
     "num_workers": 0,
@@ -104,7 +105,7 @@ CONFIG = {
     "olora_lambda":        1.0,    # weight of orthogonality loss
 
     # ── Output controls ────────────────────────────────────────────
-    "save_results":        False,   # save plots/figures under results/
+    "save_results":        True,   # save plots/figures under results/
 }
 
 
@@ -242,6 +243,8 @@ def main():
         print_final_standard_results(best_test_acc, y_true, y_pred, label_encoder)
         if save_results:
             save_standard_plots(history, y_true, y_pred, class_names, run_dir, CONFIG)
+        result = build_standard_result(CONFIG, best_test_acc, y_true, y_pred, label_encoder, history)
+        append_run(result, RESULTS_DIR)
         return
 
     # ── Sequential methods (cil_*) ────────────────────────────────
@@ -263,6 +266,8 @@ def main():
         print_final_sequential_results(best_seen_acc, task_results, y_true, y_pred, label_encoder)
         if save_results:
             save_sequential_plots(history, task_results, y_true, y_pred, class_names, run_dir, CONFIG)
+        result = build_sequential_result(CONFIG, best_seen_acc, task_results, y_true, y_pred, label_encoder, history)
+        append_run(result, RESULTS_DIR)
         return
 
     raise ValueError(f"Unsupported method: {CONFIG['method']}")

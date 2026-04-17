@@ -40,6 +40,7 @@ METHOD_DISPLAY_NAMES = {
     "cil_lwf":           "CIL LwF (Distill-only)",
     "cil_ncm":           "CIL NCM",   # suffix added dynamically based on herding_replay
     "cil_herding_ncm":   "CIL Herding+NCM (FastICARL-B)",
+    "cil_olora":         "CIL O-LoRA",
 }
 
 REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
