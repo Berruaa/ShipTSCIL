@@ -45,10 +45,8 @@ def print_run_info(config, dataset_info, label_encoder, method, device):
               f"dropout={config.get('lora_dropout', 0.05)}")
 
     if config["method"] in DISTILLATION_METHODS:
-        use_distill = config.get("use_distillation", False)
-        if config["method"] == "cil_lwf" or use_distill:
-            print(f"Distillation: T={config.get('distill_temperature', 2.0)}, "
-                  f"weight={config.get('distill_weight', 1.0)}")
+        print(f"Distillation: T={config.get('distill_temperature', 2.0)}, "
+              f"weight={config.get('distill_weight', 1.0)}")
 
 
 def print_standard_epoch(epoch, total_epochs, train_metrics, test_metrics):

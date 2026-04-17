@@ -1,3 +1,4 @@
+from collections import defaultdict
 from copy import deepcopy
 
 import torch
@@ -7,6 +8,45 @@ from tqdm import tqdm
 from methods.linear_probe import LinearProbeMethod
 from utils.losses import class_balanced_ce_loss, distillation_loss
 from utils.replay_buffers import HerdingBuffer, build_replay_buffer
+
+
+def _sample_to_cpu(sample):
+    if isinstance(sample, tuple):
+        return tuple(v.cpu() if torch.is_tensor(v) else v for v in sample)
+    return sample.cpu() if torch.is_tensor(sample) else sample
+
+
+def _rebuild_dict(original, items):
+    """Rebuild a dict preserving ``defaultdict`` factories when possible."""
+    if isinstance(original, defaultdict):
+        rebuilt = defaultdict(original.default_factory)
+        rebuilt.update(items)
+        return rebuilt
+    return dict(items)
+
+
+def _buffer_to_cpu(buffer):
+    if hasattr(buffer, "_buffer"):
+        buffer._buffer = [_sample_to_cpu(sample) for sample in buffer._buffer]
+    if hasattr(buffer, "_buffers"):
+        buffer._buffers = _rebuild_dict(
+            buffer._buffers,
+            ((cls, [_sample_to_cpu(s) for s in samples])
+             for cls, samples in buffer._buffers.items()),
+        )
+    if hasattr(buffer, "_staging"):
+        buffer._staging = _rebuild_dict(
+            buffer._staging,
+            ((cls, [_sample_to_cpu(s) for s in samples])
+             for cls, samples in buffer._staging.items()),
+        )
+    if hasattr(buffer, "_exemplars"):
+        buffer._exemplars = _rebuild_dict(
+            buffer._exemplars,
+            ((cls, [_sample_to_cpu(s) for s in samples])
+             for cls, samples in buffer._exemplars.items()),
+        )
+    return buffer
 
 
 class CILReplayLatentMethod(LinearProbeMethod):
@@ -95,6 +135,14 @@ class CILReplayLatentMethod(LinearProbeMethod):
             dist = self._buffer.class_distribution()
             print(f"  [Herding] Buffer rebuilt — {sum(dist.values())} exemplars "
                   f"across {len(dist)} classes  (max {max_per_class}/class): {dist}")
+
+    def _checkpoint_extra_state(self):
+        return {"buffer": self._buffer}
+
+    def _load_checkpoint_extra_state(self, state):
+        buffer = state.get("buffer")
+        if buffer is not None:
+            self._buffer = _buffer_to_cpu(buffer)
 
     # ------------------------------------------------------------------
     # Buffer helpers

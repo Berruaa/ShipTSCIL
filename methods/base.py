@@ -66,16 +66,25 @@ class BaseMethod:
     def evaluate(self, dataloader):
         raise NotImplementedError
 
+    def _checkpoint_extra_state(self):
+        """Subclass hook for non-model state needed to resume training."""
+        return {}
+
+    def _load_checkpoint_extra_state(self, state):
+        """Restore subclass checkpoint state. Default: no-op."""
+
     def save(self, checkpoint_path, label_classes, dataset_name, extra_config=None):
         payload = {
             "model_state_dict": self.model.state_dict(),
             "head_state_dict": self.model.head.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict() if self.optimizer is not None else None,
             "label_classes": label_classes,
             "embedding_dim": self.embedding_dim,
             "num_classes": self.num_classes,
             "model_name": self.model_name,
             "dataset_name": dataset_name,
             "extra_config": extra_config or {},
+            "method_state": self._checkpoint_extra_state(),
         }
         torch.save(payload, checkpoint_path)
 
@@ -86,4 +95,8 @@ class BaseMethod:
             weights_only=False,
         )
         self.model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer_state = checkpoint.get("optimizer_state_dict")
+        if self.optimizer is not None and optimizer_state is not None:
+            self.optimizer.load_state_dict(optimizer_state)
+        self._load_checkpoint_extra_state(checkpoint.get("method_state", {}))
         return checkpoint

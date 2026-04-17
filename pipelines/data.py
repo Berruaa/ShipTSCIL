@@ -121,6 +121,50 @@ def make_class_subset(dataset, allowed_classes):
     return Subset(dataset, indices)
 
 
+def stratified_train_val_split(dataset, val_fraction, seed=42):
+    """Split a dataset into stratified train/validation subsets.
+
+    The split is label-stratified when possible and guarantees that any class
+    with at least 2 samples keeps at least 1 sample in train and 1 in
+    validation. Classes with only a single sample remain in the training split.
+    Returns ``(train_subset, val_subset)`` where ``val_subset`` may be ``None``
+    if a meaningful validation split cannot be formed.
+    """
+    if val_fraction <= 0 or len(dataset) < 2:
+        return dataset, None
+
+    targets = extract_targets(dataset)
+    class_to_indices = {}
+    for idx, y in enumerate(targets):
+        class_to_indices.setdefault(int(y), []).append(idx)
+
+    rng = random.Random(seed)
+    train_indices = []
+    val_indices = []
+
+    for indices in class_to_indices.values():
+        indices = list(indices)
+        rng.shuffle(indices)
+
+        if len(indices) < 2:
+            train_indices.extend(indices)
+            continue
+
+        n_val = int(round(len(indices) * float(val_fraction)))
+        n_val = max(1, n_val)
+        n_val = min(len(indices) - 1, n_val)
+
+        val_indices.extend(indices[:n_val])
+        train_indices.extend(indices[n_val:])
+
+    if not train_indices or not val_indices:
+        return dataset, None
+
+    rng.shuffle(train_indices)
+    rng.shuffle(val_indices)
+    return Subset(dataset, train_indices), Subset(dataset, val_indices)
+
+
 def validate_task_order(task_order, num_classes):
     flat = [int(c) for task in task_order for c in task]
     unique = sorted(set(flat))

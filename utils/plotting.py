@@ -36,14 +36,17 @@ METHOD_DISPLAY_NAMES = {
     "svm":               "SVM",
     "cil_naive":         "CIL Naive (Fine-tune)",
     "cil_replay_raw":    "CIL Raw Replay",
+    "cil_replay_raw_lwf": "CIL Raw Replay + LwF",
     "cil_replay_latent": "CIL Latent Replay",
+    "cil_replay_lwf":    "CIL Latent Replay + LwF",
     "cil_lwf":           "CIL LwF (Distill-only)",
     "cil_ncm":           "CIL NCM",   # suffix added dynamically based on herding_replay
     "cil_herding_ncm":   "CIL Herding+NCM (FastICARL-B)",
     "cil_olora":         "CIL O-LoRA",
 }
 
-REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
+REPLAY_METHODS = {"cil_replay_raw", "cil_replay_raw_lwf",
+                  "cil_replay_latent", "cil_replay_lwf"}
 
 
 def _pretty_method(method_name: str,
@@ -232,7 +235,8 @@ def plot_task_accuracy_progression(task_results: list[dict], save_path, *,
     accs = [r["seen_acc"] for r in task_results]
     labels = [f"Task {r['task_id']}\n+cls {r['task_classes']}" for r in task_results]
 
-    fig, ax = plt.subplots(figsize=(max(6, 2 * len(task_ids)), 5))
+    fig_size = max(6, 1.4 * len(task_ids))
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size))
     bars = ax.bar(task_ids, accs, color=plt.cm.Blues(np.linspace(0.4, 0.85, len(task_ids))),
                   edgecolor="black", linewidth=0.6)
     ax.plot(task_ids, accs, marker="D", color="#d62728", linewidth=2, zorder=5)
@@ -487,12 +491,13 @@ def plot_forgetting_analysis(task_results, save_path, *,
 # =====================================================================
 
 def _plot_kwargs(config):
+    use_distillation = config["method"] in {"cil_lwf", "cil_replay_lwf", "cil_replay_raw_lwf"}
     return dict(
         method_name=config["method"],
         dataset_name=config["dataset"],
         balanced_replay=config.get("balanced_replay"),
         balanced_loss=config.get("balanced_loss"),
-        use_distillation=config.get("use_distillation"),
+        use_distillation=use_distillation,
         herding_replay=config.get("herding_replay", False),
     )
 

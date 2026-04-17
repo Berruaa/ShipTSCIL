@@ -26,6 +26,8 @@ Design principles
 from methods import SEQUENTIAL_METHODS
 
 _AUTO = "auto"
+_UWAVE_DATASET = "uwave_gesture_library"
+_UWAVE_EPOCH_OVERRIDE = 30
 
 # =====================================================================
 #  Regime constants
@@ -137,6 +139,11 @@ def auto_configure(config, n_train, num_classes):
 
     Explicit (non-``"auto"``) values are never overwritten.
     """
+    config.setdefault("use_early_stopping", True)
+    config.setdefault("validation_split", 0.1)
+    config.setdefault("early_stopping_min_delta", 1e-4)
+    config.setdefault("early_stopping_patience", _AUTO)
+
     use_lora = config.get("use_lora", False)
     use_olora = config.get("use_olora", False)
     is_sequential = config["method"] in SEQUENTIAL_METHODS
@@ -226,6 +233,23 @@ def auto_configure(config, n_train, num_classes):
                 f"capped by task-size ceiling: {step_based} → {pass_ceiling} "
                 f"(~{effective_size} samples/task)"
             )
+
+    if config.get("early_stopping_patience") == _AUTO:
+        patience = max(2, min(8, config["epochs"] // 3))
+        config["early_stopping_patience"] = patience
+        resolved["early_stopping_patience"] = patience
+
+    # ── Dataset-specific override: UWave Gesture Library ───────────
+    # This dataset often stays near chance in the first few epochs.
+    # Give it a longer fixed horizon and disable early stopping so it can recover.
+    if config.get("dataset") == _UWAVE_DATASET:
+        if config.get("use_early_stopping", True):
+            config["use_early_stopping"] = False
+            resolved["use_early_stopping"] = False
+
+        if isinstance(config.get("epochs"), int) and config["epochs"] < _UWAVE_EPOCH_OVERRIDE:
+            config["epochs"] = _UWAVE_EPOCH_OVERRIDE
+            resolved["epochs"] = _UWAVE_EPOCH_OVERRIDE
 
     # ── lr (head) ─────────────────────────────────────────────────
     if config.get("lr") == _AUTO:

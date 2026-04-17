@@ -48,6 +48,7 @@ METHOD_COLORS = {
     "cil_naive":         "#55A868",
     "cil_replay_raw":    "#C44E52",
     "cil_replay_latent": "#8172B3",
+    "cil_replay_lwf":    "#64B5CD",
     "cil_lwf":           "#937860",
     "cil_ncm":           "#DA8BC3",
     "cil_herding_ncm":   "#8C8C8C",
@@ -61,6 +62,7 @@ METHOD_LABELS = {
     "cil_naive":         "CIL Naive",
     "cil_replay_raw":    "Raw Replay",
     "cil_replay_latent": "Latent Replay",
+    "cil_replay_lwf":    "Latent Replay + LwF",
     "cil_lwf":           "LwF",
     "cil_ncm":           "NCM",
     "cil_herding_ncm":   "Herding+NCM",
@@ -345,25 +347,50 @@ def plot_512_task_progression_overlay(runs_by_method: dict, dataset_name: str, o
     if not methods:
         return
 
-    fig, ax = plt.subplots(figsize=(max(7, 1.5 * 8), 5))
+    max_tasks = max(
+        len(runs_by_method[m]["task_results"]) for m in methods
+    )
+    fig_size = max(6, 1.4 * max_tasks)
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size))
 
-    for method in methods:
+    # Distinct marker + linestyle per method so overlapping lines stay
+    # visually distinguishable (several methods start at identical values).
+    style_cycle = [
+        ("o", "-"),   ("s", "--"),  ("^", "-."),  ("D", ":"),
+        ("v", "-"),   ("P", "--"),  ("X", "-."),  ("*", ":"),
+    ]
+
+    # Small horizontal jitter around each integer task id so markers that
+    # coincide on the same (task, acc) point don't hide each other.
+    n = len(methods)
+    jitter_width = 0.28
+    offsets = (
+        np.linspace(-jitter_width / 2, jitter_width / 2, n)
+        if n > 1 else np.array([0.0])
+    )
+
+    for idx, method in enumerate(methods):
         run         = runs_by_method[method]
         task_results = run["task_results"]
         task_ids     = [r["task_id"] for r in task_results]
         seen_accs    = [r["seen_acc"] for r in task_results]
 
-        ax.plot(task_ids, seen_accs,
-                marker="o", markersize=6, linewidth=2,
-                color=color(method), label=label(method))
+        mk, ls = style_cycle[idx % len(style_cycle)]
+        x_vals = [t + offsets[idx] for t in task_ids]
+        ax.plot(x_vals, seen_accs,
+                marker=mk, markersize=9, linewidth=2.2,
+                linestyle=ls, alpha=0.9,
+                color=color(method), label=label(method),
+                markeredgecolor="white", markeredgewidth=0.9)
 
     ax.set_xlabel("Task")
     ax.set_ylabel("Seen-Class Accuracy")
     ax.set_title(f"Task Accuracy Progression — {pretty_dataset(dataset_name)}", fontsize=13)
     ax.set_ylim(-0.02, 1.05)
     ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-    ax.legend(fontsize=10, loc="lower left")
+    ax.legend(fontsize=10, loc="lower left", framealpha=0.9)
     ax.grid(alpha=0.25)
+    ax.set_box_aspect(1)
 
     _save(fig, out_dir / f"{SECTION_512}_task_progression_overlay.png")
 
@@ -457,6 +484,7 @@ def plot_512_all_methods_accuracy(runs_by_method: dict, dataset_name: str, out_d
         "linear_probe", "svm",
         "cil_naive",
         "cil_replay_latent",
+        "cil_replay_lwf",
         "cil_lwf",
         "cil_ncm", "cil_herding_ncm",
         "cil_olora",

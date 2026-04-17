@@ -9,12 +9,20 @@ from methods.cil_olora import CILOLoRAMethod
 from methods.svm import SVMMethod
 
 STANDARD_METHODS = {"linear_probe", "svm"}
-SEQUENTIAL_METHODS = {"cil_naive", "cil_replay_raw", "cil_replay_latent", "cil_lwf", "cil_ncm", "cil_herding_ncm", "cil_olora"}
-REPLAY_METHODS = {"cil_replay_raw", "cil_replay_latent"}
-DISTILLATION_METHODS = {"cil_lwf", "cil_replay_latent"}
+SEQUENTIAL_METHODS = {
+    "cil_naive", "cil_replay_raw", "cil_replay_raw_lwf",
+    "cil_replay_latent", "cil_replay_lwf", "cil_lwf",
+    "cil_ncm", "cil_herding_ncm", "cil_olora",
+}
+REPLAY_METHODS = {
+    "cil_replay_raw", "cil_replay_raw_lwf",
+    "cil_replay_latent", "cil_replay_lwf",
+}
+DISTILLATION_METHODS = {"cil_lwf", "cil_replay_lwf", "cil_replay_raw_lwf"}
 
 _LORA_INCOMPATIBLE = {
     "cil_replay_latent", "latent_replay",
+    "cil_replay_lwf", "replay_lwf",
     "svm",
     "cil_ncm", "ncm",
     "cil_herding_ncm", "herding_ncm",
@@ -34,7 +42,6 @@ def build_method(
     replay_batch_size=32,
     balanced_replay=True,
     balanced_loss=True,
-    use_distillation=False,
     distill_temperature=2.0,
     distill_weight=1.0,
     herding_replay=False,
@@ -82,7 +89,9 @@ def build_method(
             lora_config=lora_config,
         )
 
-    if method_name in {"cil_replay_raw", "raw_replay"}:
+    if method_name in {"cil_replay_raw", "raw_replay",
+                       "cil_replay_raw_lwf", "raw_replay_lwf"}:
+        use_distillation = method_name in {"cil_replay_raw_lwf", "raw_replay_lwf"}
         return CILReplayRawMethod(
             model_name=model_name,
             num_classes=num_classes,
@@ -93,11 +102,14 @@ def build_method(
             replay_batch_size=replay_batch_size,
             balanced_replay=balanced_replay,
             balanced_loss=balanced_loss,
+            use_distillation=use_distillation,
+            distill_temperature=distill_temperature,
+            distill_weight=distill_weight,
             herding_replay=herding_replay,
             lora_config=lora_config,
         )
 
-    if method_name in {"cil_replay_latent", "latent_replay"}:
+    if method_name in {"cil_replay_latent", "latent_replay", "cil_replay_lwf", "replay_lwf"}:
         return CILReplayLatentMethod(
             model_name=model_name,
             num_classes=num_classes,
@@ -108,7 +120,7 @@ def build_method(
             replay_batch_size=replay_batch_size,
             balanced_replay=balanced_replay,
             balanced_loss=balanced_loss,
-            use_distillation=use_distillation,
+            use_distillation=method_name in {"cil_replay_lwf", "replay_lwf"},
             distill_temperature=distill_temperature,
             distill_weight=distill_weight,
             herding_replay=herding_replay,

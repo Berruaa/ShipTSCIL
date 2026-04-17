@@ -1,21 +1,42 @@
 """
-run_all.py
-==========
-Train every (dataset × method) combination and record results to
-``results/all_results.json`` automatically.
+run_loras.py
+============
+Train every (dataset × method) combination **with LoRA / O-LoRA enabled**
+and record results to ``results/lora/all_results.json``.
 
-LoRA and O-LoRA are excluded by default (too compute-heavy).
-The MOMENT embedding cache is shared across methods for the same dataset,
-so each dataset only pays the full inference cost once.
+This script is the LoRA-family counterpart to ``run_all.py``.  Results
+are written to a *separate* results directory so the frozen-encoder
+comparisons in the main report are not affected.
+
+Why these specific methods?
+---------------------------
+LoRA adapters learn *only if the encoder receives a gradient signal*.
+The combinations below are the ones where that signal actually exists
+(CE + optional replay / distillation on a trainable linear head):
+
+* ``linear_probe``        — standard LoRA fine-tuning baseline
+* ``cil_naive``           — CIL baseline: just fine-tune with LoRA, no anti-forgetting
+* ``cil_replay_raw``      — CIL + raw replay (herding + balanced loss + balanced replay)
+* ``cil_replay_raw_lwf``  — CIL + raw replay + LwF distillation (the combo variant)
+* ``cil_lwf``             — CIL + LwF knowledge distillation
+* ``cil_olora``           — O-LoRA with CE loss + orthogonality constraint
+
+NCM / Herding-NCM are *excluded* on purpose: they perform **no gradient
+updates**, so LoRA adapters would stay at their identity init and the
+run would be numerically identical to plain NCM.  Latent-replay variants
+are also excluded — they pre-cache embeddings from a frozen encoder,
+which is incompatible with a trainable LoRA encoder.
 
 Usage
 -----
-    python run_all.py                                   # all datasets × all methods
-    python run_all.py --datasets ecg5000 ethanol_level  # subset of datasets
-    python run_all.py --methods linear_probe cil_naive  # subset of methods
-    python run_all.py --dry-run                         # preview without training
-    python run_all.py --skip-existing                   # skip already-logged runs
-    python run_all.py --seed 0                          # override random seed
+    python run_loras.py                                   # every dataset × every method
+    python run_loras.py --datasets ecg5000 uci_har        # subset of datasets
+    python run_loras.py --methods cil_lwf cil_olora       # subset of methods
+    python run_loras.py --olora-only                      # only run cil_olora
+    python run_loras.py --lora-only                       # only run the LoRA methods
+    python run_loras.py --dry-run                         # preview without training
+    python run_loras.py --skip-existing                   # skip already-logged runs
+    python run_loras.py --seed 0                          # override random seed
 """
 
 import argparse
@@ -29,9 +50,9 @@ from pathlib import Path
 # ── Project paths ─────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR     = PROJECT_ROOT / "data"
-SAVE_DIR     = PROJECT_ROOT / "checkpoints"
-CACHE_DIR    = PROJECT_ROOT / "embeddings_cache"
-RESULTS_DIR  = PROJECT_ROOT / "results"
+SAVE_DIR     = PROJECT_ROOT / "checkpoints" / "lora"
+CACHE_DIR    = PROJECT_ROOT / "embeddings_cache"   # unused by LoRA runs, kept for signature
+RESULTS_DIR  = PROJECT_ROOT / "results" / "lora"
 
 # Resolved lazily in main() so --dry-run works without a full ML environment.
 DEVICE: str = "cpu"
@@ -48,18 +69,21 @@ ALL_DATASETS = [
     "insect_sound",
 ]
 
-# Methods in the order they appear in the report (baselines first, then CIL).
-# LoRA / O-LoRA are intentionally omitted.
-ALL_METHODS = [
+# LoRA fine-tuning methods (use_lora=True).
+LORA_METHODS = [
     "linear_probe",
-    "svm",
     "cil_naive",
-    "cil_replay_latent",
-    "cil_replay_lwf",
+    "cil_replay_raw",
+    "cil_replay_raw_lwf",
     "cil_lwf",
-    "cil_ncm",
-    "cil_herding_ncm",
 ]
+
+# O-LoRA native method (use_olora=True).
+OLORA_METHODS = [
+    "cil_olora",
+]
+
+ALL_METHODS = LORA_METHODS + OLORA_METHODS
 
 # ── Default CONFIG template ───────────────────────────────────────────────────
 
@@ -85,54 +109,65 @@ BASE_CONFIG = {
     "herding_replay":      True,
     # Loss
     "balanced_loss":       True,
-    # Distillation hyperparameters (used by distillation-based methods)
+    # Distillation
     "distill_temperature": 2.0,
     "distill_weight":      1.0,
-    # LoRA — disabled for all runs in this script
-    "use_lora":            False,
+    # LoRA — enabled by default for this sweep; can be overridden per method
+    "use_lora":            True,
     "lora_rank":           8,
     "lora_alpha":          16,
     "lora_target_modules": None,
     "lora_dropout":        0.05,
     "lora_lr":             "auto",
-    # O-LoRA — disabled
+    # O-LoRA — enabled only for cil_olora via METHOD_OVERRIDES below
     "use_olora":           False,
     "olora_lambda":        1.0,
     # Output
-    "save_results":        True,  
+    "save_results":        True,
 }
 
-# Per-method config overrides applied on top of BASE_CONFIG
+# Per-method config overrides applied on top of BASE_CONFIG.
 METHOD_OVERRIDES = {
+    "linear_probe": {
+        # Standard fine-tuning baseline — no replay/distill config needed.
+        "use_lora":       True,
+        "use_olora":      False,
+    },
     "cil_naive": {
+        "use_lora":       True,
+        "use_olora":      False,
         "balanced_replay": False,
-        "herding_replay": False,
-        "balanced_loss": False,
+        "herding_replay":  False,
+        "balanced_loss":   False,
     },
-    "cil_replay_latent": {
+    "cil_replay_raw": {
+        "use_lora":       True,
+        "use_olora":      False,
         "balanced_replay": True,
-        "herding_replay": True,
-        "balanced_loss": True,
+        "herding_replay":  True,
+        "balanced_loss":   True,
     },
-    "cil_replay_lwf": {
+    "cil_replay_raw_lwf": {
+        "use_lora":       True,
+        "use_olora":      False,
         "balanced_replay": True,
-        "herding_replay": True,
-        "balanced_loss": True,
+        "herding_replay":  True,
+        "balanced_loss":   True,
     },
     "cil_lwf": {
+        "use_lora":       True,
+        "use_olora":      False,
         "balanced_replay": True,
-        "herding_replay": False,
-        "balanced_loss": True,
+        "herding_replay":  False,
+        "balanced_loss":   True,
     },
-    "cil_ncm": {
-        "balanced_replay": True,
-        "herding_replay": False,
-        "balanced_loss": True,
-    },
-    "cil_herding_ncm": {
-        "balanced_replay": True,
-        "herding_replay": True,
-        "balanced_loss": True,
+    "cil_olora": {
+        # O-LoRA owns the LoRA adapters itself; use_olora flips it on.
+        "use_lora":       True,
+        "use_olora":      True,
+        "balanced_replay": False,
+        "herding_replay":  False,
+        "balanced_loss":   True,
     },
 }
 
@@ -146,13 +181,37 @@ def _build_config(dataset: str, method: str, seed: int) -> dict:
     return cfg
 
 
-# ── Core training logic (mirrors train.py main()) ────────────────────────────
+def _build_lora_config(cfg: dict) -> dict | None:
+    """Assemble the ``lora_config`` dict passed to ``build_method``."""
+    if cfg.get("use_olora", False):
+        return {
+            "enabled":        True,
+            "olora":          True,
+            "rank":           cfg.get("lora_rank", 8),
+            "alpha":          cfg.get("lora_alpha", 16),
+            "target_modules": cfg.get("lora_target_modules"),
+            "dropout":        cfg.get("lora_dropout", 0.05),
+            "lr":             cfg.get("lora_lr", cfg["lr"] * 0.2 if isinstance(cfg.get("lr"), (int, float)) else cfg.get("lr")),
+            "olora_lambda":   cfg.get("olora_lambda", 1.0),
+        }
+    if cfg.get("use_lora", False):
+        return {
+            "enabled":        True,
+            "rank":           cfg.get("lora_rank", 8),
+            "alpha":          cfg.get("lora_alpha", 16),
+            "target_modules": cfg.get("lora_target_modules"),
+            "dropout":        cfg.get("lora_dropout", 0.05),
+            "lr":             cfg.get("lora_lr", cfg["lr"] * 0.2 if isinstance(cfg.get("lr"), (int, float)) else cfg.get("lr")),
+        }
+    return None
+
+
+# ── Core training logic (LoRA-aware; mirrors train.py main()) ────────────────
 
 def run_one(config: dict) -> dict:
     """
-    Run a single (dataset, method) experiment.
-    Returns the result dict that was saved to all_results.json.
-    Raises on unrecoverable errors.
+    Run a single (dataset, method) LoRA experiment.
+    Returns the result dict that was saved to lora/all_results.json.
     """
     from methods import build_method, STANDARD_METHODS, SEQUENTIAL_METHODS
     from pipelines import (
@@ -162,7 +221,6 @@ def run_one(config: dict) -> dict:
         build_task_order,
         collect_predictions,
         make_class_subset,
-        precompute_embeddings,
         train_sequential,
         train_standard,
         validate_task_order,
@@ -189,10 +247,6 @@ def run_one(config: dict) -> dict:
     num_classes = len(label_encoder.classes_)
     auto_configure(config, n_train=len(train_dataset), num_classes=num_classes)
 
-    _SINGLE_EPOCH = {"svm", "cil_ncm", "ncm", "cil_herding_ncm", "herding_ncm"}
-    if config["method"] in _SINGLE_EPOCH:
-        config["epochs"] = 1
-
     # ── Task order ────────────────────────────────────────────────────────────
     if config["method"] in SEQUENTIAL_METHODS:
         if config.get("task_order") is None:
@@ -205,7 +259,10 @@ def run_one(config: dict) -> dict:
             )
         validate_task_order(config["task_order"], num_classes)
 
-    # ── Build method (no LoRA in this script) ─────────────────────────────────
+    # ── LoRA / O-LoRA config ──────────────────────────────────────────────────
+    lora_config = _build_lora_config(config)
+
+    # ── Build method ──────────────────────────────────────────────────────────
     method = build_method(
         method_name=config["method"],
         model_name=config["model_name"],
@@ -220,7 +277,7 @@ def run_one(config: dict) -> dict:
         distill_temperature=config.get("distill_temperature", 2.0),
         distill_weight=config.get("distill_weight", 1.0),
         herding_replay=config.get("herding_replay", False),
-        lora_config=None,
+        lora_config=lora_config,
     )
 
     print_run_info(
@@ -228,19 +285,9 @@ def run_one(config: dict) -> dict:
         label_encoder=label_encoder, method=method, device=DEVICE,
     )
 
-    # ── Embeddings (cached to disk — shared across methods for same dataset) ──
-    encoder = getattr(method, "encoder", None) or method.model.encoder
-    emb_kwargs = dict(
-        device=DEVICE, batch_size=config["batch_size"],
-        cache_dir=CACHE_DIR, dataset_name=config["dataset"],
-        model_name=config["model_name"],
-    )
-    print(f"\nPreparing embeddings … (device: {DEVICE})")
-    _RAW_SAMPLE_METHODS = {"cil_replay_raw", "cil_replay_raw_lwf"}
-    if config["method"] not in _RAW_SAMPLE_METHODS:
-        train_dataset = precompute_embeddings(encoder, train_dataset, split="train", **emb_kwargs)
-    test_dataset = precompute_embeddings(encoder, test_dataset, split="test", **emb_kwargs)
-    print("Done.\n")
+    # ── Embeddings: SKIPPED for LoRA (encoder is trainable) ───────────────────
+    print("\nLoRA enabled — skipping embedding precomputation "
+          "(encoder is trainable).\n")
 
     class_names = [str(c) for c in label_encoder.classes_]
 
@@ -249,7 +296,8 @@ def run_one(config: dict) -> dict:
     if save_plots:
         from datetime import datetime as _dt
         timestamp = _dt.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = RESULTS_DIR / f"{config['dataset']}_{config['method']}_{timestamp}"
+        tag = "olora" if config.get("use_olora") else "lora"
+        run_dir = RESULTS_DIR / f"{config['dataset']}_{config['method']}_{tag}_{timestamp}"
         run_dir.mkdir(parents=True, exist_ok=True)
         print(f"Plots will be saved to: {run_dir}\n")
     else:
@@ -315,65 +363,17 @@ def _print_banner(text: str, width: int = 72):
     print("=" * width)
 
 
-def _print_run_header(idx: int, total: int, dataset: str, method: str):
+def _print_run_header(idx: int, total: int, dataset: str, method: str, tag: str):
     pct = 100 * idx / total
     print(f"\n{'─' * 72}")
-    print(f"  Run {idx}/{total} ({pct:.0f}%)   dataset={dataset}   method={method}")
+    print(f"  Run {idx}/{total} ({pct:.0f}%)   dataset={dataset}   method={method}   [{tag}]")
     print(f"{'─' * 72}")
-
-
-# ── Copy latent → raw ─────────────────────────────────────────────────────────
-
-def copy_latent_to_raw(results_dir: Path):
-    """
-    For every cil_replay_latent entry in all_results.json, insert an identical
-    entry with method='cil_replay_raw' (skipping datasets that already have one).
-    """
-    import json
-    from datetime import datetime
-
-    log_path = results_dir / "all_results.json"
-    if not log_path.exists():
-        print("No all_results.json found — nothing to copy.")
-        return
-
-    with open(log_path, "r", encoding="utf-8") as fh:
-        runs = json.load(fh)
-
-    existing_raw = {r["dataset"] for r in runs if r["method"] == "cil_replay_raw"}
-    latent_runs  = [r for r in runs if r["method"] == "cil_replay_latent"]
-
-    if not latent_runs:
-        print("No cil_replay_latent results found to copy.")
-        return
-
-    added = 0
-    for run in latent_runs:
-        ds = run["dataset"]
-        if ds in existing_raw:
-            print(f"  Skipping {ds} — cil_replay_raw already exists.")
-            continue
-        copy = {**run}
-        copy["method"]    = "cil_replay_raw"
-        copy["run_id"]    = f"{ds}_cil_replay_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        copy["timestamp"] = datetime.now().isoformat()
-        if "config" in copy:
-            copy["config"] = {**copy["config"], "method": "cil_replay_raw"}
-        runs.append(copy)
-        existing_raw.add(ds)
-        added += 1
-        print(f"  Copied {ds}: cil_replay_latent → cil_replay_raw")
-
-    with open(log_path, "w", encoding="utf-8") as fh:
-        json.dump(runs, fh, indent=2)
-
-    print(f"\nDone — {added} entr{'y' if added == 1 else 'ies'} added to {log_path}")
 
 
 # ── Existing-results checker ──────────────────────────────────────────────────
 
 def _already_logged(dataset: str, method: str) -> bool:
-    """Return True if a run for this (dataset, method) already exists in JSON."""
+    """Return True if a LoRA run for this (dataset, method) already exists."""
     import json
     log_path = RESULTS_DIR / "all_results.json"
     if not log_path.exists():
@@ -390,7 +390,8 @@ def _already_logged(dataset: str, method: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train every (dataset × method) combo and log results to JSON."
+        description="Train every (dataset × method) combo with LoRA/O-LoRA "
+                    "and log results to results/lora/all_results.json.",
     )
     parser.add_argument(
         "--datasets", nargs="+", default=None,
@@ -403,29 +404,41 @@ def main():
         help=f"Methods to include (default: all). Choices: {ALL_METHODS}",
     )
     parser.add_argument(
+        "--lora-only", action="store_true",
+        help="Run only the plain-LoRA methods (skip cil_olora).",
+    )
+    parser.add_argument(
+        "--olora-only", action="store_true",
+        help="Run only cil_olora.",
+    )
+    parser.add_argument(
         "--seed", type=int, default=42,
         help="Random seed (default: 42)",
     )
     parser.add_argument(
         "--skip-existing", action="store_true",
-        help="Skip (dataset, method) pairs that already have a result logged.",
+        help="Skip (dataset, method) pairs that already have a LoRA result logged.",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Print the planned runs without training anything.",
     )
-    parser.add_argument(
-        "--copy-latent-to-raw", action="store_true",
-        help="Copy all cil_replay_latent results to cil_replay_raw in the JSON, then exit.",
-    )
     args = parser.parse_args()
 
-    if args.copy_latent_to_raw:
-        copy_latent_to_raw(RESULTS_DIR)
-        return
-
     datasets = args.datasets if args.datasets else ALL_DATASETS
-    methods  = args.methods  if args.methods  else ALL_METHODS
+
+    if args.lora_only and args.olora_only:
+        print("ERROR: --lora-only and --olora-only are mutually exclusive.")
+        sys.exit(1)
+
+    if args.methods:
+        methods = args.methods
+    elif args.lora_only:
+        methods = list(LORA_METHODS)
+    elif args.olora_only:
+        methods = list(OLORA_METHODS)
+    else:
+        methods = list(ALL_METHODS)
 
     # Validate
     bad_ds = [d for d in datasets if d not in ALL_DATASETS]
@@ -437,7 +450,6 @@ def main():
         print(f"ERROR: Unknown methods: {bad_mt}. Available: {ALL_METHODS}")
         sys.exit(1)
 
-    # Build run list
     runs = [(ds, mt) for ds in datasets for mt in methods]
     total = len(runs)
 
@@ -447,35 +459,42 @@ def main():
         import torch
         DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-    _print_banner(f"ShipTSCIL — Full Training Sweep  ({total} runs planned)")
-    print(f"  Datasets : {datasets}")
-    print(f"  Methods  : {methods}")
-    print(f"  Seed     : {args.seed}")
-    print(f"  Device   : {'(dry-run)' if args.dry_run else DEVICE}")
+    _print_banner(f"ShipTSCIL — LoRA / O-LoRA Sweep  ({total} runs planned)")
+    print(f"  Datasets     : {datasets}")
+    print(f"  Methods      : {methods}")
+    print(f"  Seed         : {args.seed}")
+    print(f"  Device       : {'(dry-run)' if args.dry_run else DEVICE}")
+    print(f"  Results dir  : {RESULTS_DIR}")
     print(f"  Skip existing: {args.skip_existing}")
-    print(f"  Dry run  : {args.dry_run}")
+    print(f"  Dry run      : {args.dry_run}")
     print()
 
     if args.dry_run:
         print("Planned runs:")
         for i, (ds, mt) in enumerate(runs, 1):
+            tag = "O-LoRA" if mt in OLORA_METHODS else "LoRA"
             exists = "  [SKIP — already logged]" if (args.skip_existing and _already_logged(ds, mt)) else ""
-            print(f"  {i:3d}. {ds:28s}  {mt}{exists}")
+            print(f"  {i:3d}. {ds:28s}  {mt:<22s}  [{tag}]{exists}")
         print(f"\nTotal: {total} runs")
         return
 
     # ── Execute ───────────────────────────────────────────────────────────────
-    statuses: list[tuple[str, str, str, float]] = []   # (dataset, method, status, elapsed)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
+    statuses: list[tuple[str, str, str, float]] = []
     wall_start = time.time()
 
     for idx, (dataset, method) in enumerate(runs, 1):
+        tag = "O-LoRA" if method in OLORA_METHODS else "LoRA"
+
         if args.skip_existing and _already_logged(dataset, method):
-            _print_run_header(idx, total, dataset, method)
-            print("  → Skipping (result already in all_results.json)")
+            _print_run_header(idx, total, dataset, method, tag)
+            print("  → Skipping (result already in lora/all_results.json)")
             statuses.append((dataset, method, "SKIPPED", 0.0))
             continue
 
-        _print_run_header(idx, total, dataset, method)
+        _print_run_header(idx, total, dataset, method, tag)
         t0 = time.time()
         try:
             config = _build_config(dataset, method, args.seed)
@@ -490,7 +509,6 @@ def main():
             traceback.print_exc()
             print("  (continuing with next run …)\n")
 
-        # Rough ETA
         done    = idx
         ok_done = sum(1 for _, _, s, _ in statuses if s != "SKIPPED")
         if ok_done > 0:
@@ -501,7 +519,7 @@ def main():
 
     # ── Final summary ─────────────────────────────────────────────────────────
     wall_total = time.time() - wall_start
-    _print_banner("Sweep complete")
+    _print_banner("LoRA sweep complete")
     print(f"  Total wall time : {_hms(wall_total)}")
     print(f"  Runs attempted  : {sum(1 for *_, s, _ in statuses if s != 'SKIPPED')}")
     print(f"  Successful      : {sum(1 for *_, s, _ in statuses if s == 'OK')}")
@@ -520,10 +538,9 @@ def main():
     if failed:
         print(f"\nFailed runs ({len(failed)}):")
         for ds, mt in failed:
-            print(f"  python run_all.py --datasets {ds} --methods {mt}")
+            print(f"  python run_loras.py --datasets {ds} --methods {mt}")
 
     print(f"\nResults saved to: {RESULTS_DIR / 'all_results.json'}")
-    print("Generate report : python generate_report.py --dataset <dataset>")
 
 
 if __name__ == "__main__":

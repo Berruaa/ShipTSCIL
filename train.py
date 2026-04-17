@@ -34,13 +34,14 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 # ======================================================================
 CONFIG = {
     # ── What to run ───────────────────────────────────────────────
-    # Methods: svm, linear_probe,
-    # cil_naive,
-    # cil_replay_raw, cil_replay_latent,
-    # cil_lwf (Distillation),
-    # cil_ncm  (FastICARL — NCM (default); Herding+NCM when herding_replay=True)
-    "method":     "cil_replay_raw",
-    "dataset":    "ethanol_level",
+    # Methods:
+    #   Standard:    svm, linear_probe
+    #   Sequential:  cil_naive,
+    #                cil_replay_raw, cil_replay_raw_lwf,
+    #                cil_replay_latent, cil_replay_lwf,
+    #                cil_lwf, cil_ncm, cil_herding_ncm, cil_olora
+    "method":     "cil_replay_latent",
+    "dataset":    "electric_devices",
     "model_name": "AutonLab/MOMENT-1-base",
 
     # Set to file paths to override the dataset registry lookup.
@@ -57,7 +58,7 @@ CONFIG = {
     # ── Class-incremental setup ───────────────────────────────────
     "task_order":          None,   # auto-generated if None
     "num_tasks":           None,   # optional override for number of tasks
-    "shuffle_class_order": True,
+    "shuffle_class_order": False,
     "classes_per_task":    2,
 
     # ── Replay buffer (replay methods only) ───────────────────────
@@ -70,15 +71,15 @@ CONFIG = {
     # ── Loss ─────────────────────────────────────────────────────
     "balanced_loss":       True,   # class-weighted CE vs standard CE
 
-    # ── Distillation (cil_lwf / cil_replay_latent only) ──────────
-    "use_distillation":    False,
+    # ── Distillation hyperparameters (used by distillation-based methods) ─
     "distill_temperature": 2.0,
     "distill_weight":      1.0,
 
     # ── LoRA (parameter-efficient fine-tuning of backbone) ─────────
     # When enabled the MOMENT encoder receives low-rank adapters on
     # selected attention projections.  All original weights stay frozen.
-    # Compatible methods: linear_probe, cil_naive, cil_replay_raw, cil_lwf.
+    # Compatible methods: linear_probe, cil_naive, cil_replay_raw,
+    #                     cil_replay_raw_lwf, cil_lwf.
     #
     # When use_lora is True, "auto" values above are adjusted:
     #   lr:       2e-4 (vs 5e-4 frozen) — more conservative head LR
@@ -101,7 +102,7 @@ CONFIG = {
     # interference.  No replay or distillation needed.
     # Set method to "cil_olora" and use_olora to True.
     # Inherits lora_rank, lora_alpha, lora_target_modules, lora_dropout.
-    "use_olora":           True,
+    "use_olora":           False,
     "olora_lambda":        1.0,    # weight of orthogonality loss
 
     # ── Output controls ────────────────────────────────────────────
@@ -186,7 +187,6 @@ def main():
         replay_batch_size=CONFIG.get("replay_batch_size", 32),
         balanced_replay=CONFIG.get("balanced_replay", True),
         balanced_loss=CONFIG.get("balanced_loss", True),
-        use_distillation=CONFIG.get("use_distillation", False),
         distill_temperature=CONFIG.get("distill_temperature", 2.0),
         distill_weight=CONFIG.get("distill_weight", 1.0),
         herding_replay=CONFIG.get("herding_replay", False),
@@ -215,7 +215,8 @@ def main():
             model_name=CONFIG["model_name"],
         )
         print(f"\nPreparing embeddings … (device: {DEVICE})")
-        if CONFIG["method"] != "cil_replay_raw":
+        _RAW_SAMPLE_METHODS = {"cil_replay_raw", "cil_replay_raw_lwf"}
+        if CONFIG["method"] not in _RAW_SAMPLE_METHODS:
             train_dataset = precompute_embeddings(encoder, train_dataset, split="train", **emb_kwargs)
         test_dataset = precompute_embeddings(encoder, test_dataset, split="test", **emb_kwargs)
         print("Done.\n")

@@ -1,10 +1,52 @@
+from collections import defaultdict
+from copy import deepcopy
+
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
 from methods.linear_probe import LinearProbeMethod
-from utils.losses import class_balanced_ce_loss
+from utils.losses import class_balanced_ce_loss, distillation_loss
 from utils.replay_buffers import HerdingBuffer, build_replay_buffer
+
+
+def _sample_to_cpu(sample):
+    if isinstance(sample, tuple):
+        return tuple(v.cpu() if torch.is_tensor(v) else v for v in sample)
+    return sample.cpu() if torch.is_tensor(sample) else sample
+
+
+def _rebuild_dict(original, items):
+    """Rebuild a dict preserving ``defaultdict`` factories when possible."""
+    if isinstance(original, defaultdict):
+        rebuilt = defaultdict(original.default_factory)
+        rebuilt.update(items)
+        return rebuilt
+    return dict(items)
+
+
+def _buffer_to_cpu(buffer):
+    if hasattr(buffer, "_buffer"):
+        buffer._buffer = [_sample_to_cpu(sample) for sample in buffer._buffer]
+    if hasattr(buffer, "_buffers"):
+        buffer._buffers = _rebuild_dict(
+            buffer._buffers,
+            ((cls, [_sample_to_cpu(s) for s in samples])
+             for cls, samples in buffer._buffers.items()),
+        )
+    if hasattr(buffer, "_staging"):
+        buffer._staging = _rebuild_dict(
+            buffer._staging,
+            ((cls, [_sample_to_cpu(s) for s in samples])
+             for cls, samples in buffer._staging.items()),
+        )
+    if hasattr(buffer, "_exemplars"):
+        buffer._exemplars = _rebuild_dict(
+            buffer._exemplars,
+            ((cls, [_sample_to_cpu(s) for s in samples])
+             for cls, samples in buffer._exemplars.items()),
+        )
+    return buffer
 
 
 class CILReplayRawMethod(LinearProbeMethod):
@@ -30,6 +72,9 @@ class CILReplayRawMethod(LinearProbeMethod):
         replay_batch_size=32,
         balanced_replay=True,
         balanced_loss=True,
+        use_distillation=False,
+        distill_temperature=2.0,
+        distill_weight=1.0,
         herding_replay=False,
         lora_config=None,
     ):
@@ -47,6 +92,12 @@ class CILReplayRawMethod(LinearProbeMethod):
         self.balanced_loss = balanced_loss
         self.herding_replay = herding_replay
 
+        self.use_distillation = use_distillation
+        self.distill_temperature = distill_temperature
+        self.distill_weight = distill_weight
+        self._old_head = None
+        self._old_classes: list[int] = []
+
         self._buffer = build_replay_buffer(
             total_size=self.replay_buffer_size,
             balanced=self.balanced_replay,
@@ -59,6 +110,16 @@ class CILReplayRawMethod(LinearProbeMethod):
     # ------------------------------------------------------------------
 
     def begin_task(self, task_id, task_classes, old_classes):
+        if self.use_distillation and old_classes:
+            self._old_head = deepcopy(self.model.head)
+            self._old_head.eval()
+            for p in self._old_head.parameters():
+                p.requires_grad = False
+            self._old_classes = list(old_classes)
+        else:
+            self._old_head = None
+            self._old_classes = []
+
         if self.herding_replay:
             self._buffer.begin_task()
 
@@ -72,6 +133,18 @@ class CILReplayRawMethod(LinearProbeMethod):
         elif self.herding_replay and not self._buffer_is_embeddings:
             print("  [Herding] Skipped: herding requires precomputed embeddings "
                   "(raw time-series path detected).")
+
+    def _checkpoint_extra_state(self):
+        return {
+            "buffer": self._buffer,
+            "buffer_is_embeddings": self._buffer_is_embeddings,
+        }
+
+    def _load_checkpoint_extra_state(self, state):
+        buffer = state.get("buffer")
+        if buffer is not None:
+            self._buffer = _buffer_to_cpu(buffer)
+        self._buffer_is_embeddings = state.get("buffer_is_embeddings", self._buffer_is_embeddings)
 
     # ------------------------------------------------------------------
     # Buffer helpers
@@ -125,11 +198,21 @@ class CILReplayRawMethod(LinearProbeMethod):
     # Training
     # ------------------------------------------------------------------
 
+    def _encode(self, x, mask):
+        """Encoder forward — respects LoRA trainability."""
+        if getattr(self, "_lora_enabled", False):
+            return self.model.encoder(x, mask)
+        with torch.no_grad():
+            return self.model.encoder(x, mask)
+
     def train_epoch(self, dataloader):
         self.model.train()
-        self.model.encoder.eval()
+        if not getattr(self, "_lora_enabled", False):
+            self.model.encoder.eval()
 
         total_loss = 0.0
+        total_ce = 0.0
+        total_kd = 0.0
         total_correct = 0
         total_samples = 0
 
@@ -156,37 +239,58 @@ class CILReplayRawMethod(LinearProbeMethod):
                 else:
                     train_emb, train_y = current_emb, batch_y
 
-                self.optimizer.zero_grad()
-                logits = self.model.head(train_emb)
-
             else:
                 batch_x, batch_mask, batch_y = batch
                 batch_x = batch_x.to(self.device).float()
                 batch_mask = batch_mask.to(self.device)
                 batch_y = batch_y.to(self.device)
 
+                current_emb = self._encode(batch_x, batch_mask)
+
                 replay = self._sample_replay_raw()
                 if replay is not None:
                     rx, rm, ry = replay
-                    train_x = torch.cat([batch_x, rx], dim=0)
-                    train_mask = torch.cat([batch_mask, rm], dim=0)
+                    replay_emb = self._encode(rx, rm)
+                    train_emb = torch.cat([current_emb, replay_emb], dim=0)
                     train_y = torch.cat([batch_y, ry], dim=0)
                 else:
-                    train_x, train_mask, train_y = batch_x, batch_mask, batch_y
+                    train_emb = current_emb
+                    train_y = batch_y
 
-                self.optimizer.zero_grad()
-                logits, _ = self.model(train_x, train_mask)
+            n_current = current_emb.size(0)
+
+            self.optimizer.zero_grad()
+            logits = self.model.head(train_emb)
 
             if self.balanced_loss:
-                loss = class_balanced_ce_loss(logits, train_y)
+                ce_loss = class_balanced_ce_loss(logits, train_y)
             else:
-                loss = F.cross_entropy(logits, train_y)
+                ce_loss = F.cross_entropy(logits, train_y)
+
+            # LwF: distil old-head outputs on CURRENT samples only.
+            if self._old_head is not None:
+                current_logits = logits[:n_current]
+                with torch.no_grad():
+                    old_logits = self._old_head(current_emb.detach())
+                kd_loss = distillation_loss(
+                    new_logits=current_logits,
+                    old_logits=old_logits,
+                    old_classes=self._old_classes,
+                    temperature=self.distill_temperature,
+                )
+                loss = ce_loss + self.distill_weight * kd_loss
+            else:
+                kd_loss = logits.new_tensor(0.0)
+                loss = ce_loss
+
             loss.backward()
             self.optimizer.step()
 
             preds = torch.argmax(logits, dim=1)
             n = train_y.size(0)
             total_loss += loss.item() * n
+            total_ce += ce_loss.item() * n
+            total_kd += kd_loss.item() * n
             total_correct += (preds == train_y).sum().item()
             total_samples += n
 
@@ -201,4 +305,8 @@ class CILReplayRawMethod(LinearProbeMethod):
 
         avg_loss = total_loss / total_samples
         avg_acc = total_correct / total_samples
-        return {"loss": avg_loss, "acc": avg_acc}
+        result = {"loss": avg_loss, "acc": avg_acc}
+        if self.use_distillation:
+            result["ce_loss"] = total_ce / total_samples
+            result["kd_loss"] = total_kd / total_samples
+        return result
