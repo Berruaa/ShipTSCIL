@@ -138,6 +138,20 @@ CONFIG = {
 }
 ```
 
+### Batch sweeps (`run_all.py`)
+
+Run all methods for a single dataset:
+
+```bash
+python run_all.py --datasets uwave_gesture_library
+```
+
+Notes:
+
+- `run_all.py` appends to `results/all_results.json`; re-running does not delete older entries.
+- `generate_report.py` uses the latest run per method (newest `timestamp`) for each dataset.
+- To fully replace one dataset's stored runs, remove that dataset's old entries from `results/all_results.json` before re-running.
+
 ## Configuration Reference
 
 | Key | Type | Default | Description |
@@ -209,6 +223,10 @@ When a value is set to `"auto"`, `pipelines.config.auto_configure` resolves it f
 | Replay buffer cap | 5,000 | 8,000 (1.5x pct) |
 | Replay batch ratio | 50% of batch | 75% of batch |
 | Grad-step target | 200 | 150 |
+
+Dataset-specific override:
+
+- For `uwave_gesture_library`, auto-config enforces a longer training horizon (minimum 30 epochs) and disables early stopping by default (`use_early_stopping=False`) to avoid early chance-level plateaus.
 
 ## Datasets
 

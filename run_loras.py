@@ -36,6 +36,7 @@ Usage
     python run_loras.py --lora-only                       # only run the LoRA methods
     python run_loras.py --dry-run                         # preview without training
     python run_loras.py --skip-existing                   # skip already-logged runs
+    python run_loras.py --replace-existing                # remove old rows for planned runs first
     python run_loras.py --seed 0                          # override random seed
 """
 
@@ -386,6 +387,29 @@ def _already_logged(dataset: str, method: str) -> bool:
         return False
 
 
+def _prune_logged_runs(target_runs: list[tuple[str, str]]) -> int:
+    """Delete existing rows in JSON for specific (dataset, method) pairs."""
+    import json
+
+    log_path = RESULTS_DIR / "all_results.json"
+    if not log_path.exists():
+        return 0
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as fh:
+            runs = json.load(fh)
+    except Exception:
+        return 0
+
+    targets = set(target_runs)
+    kept = [r for r in runs if (r.get("dataset"), r.get("method")) not in targets]
+    removed = len(runs) - len(kept)
+    if removed > 0:
+        with open(log_path, "w", encoding="utf-8") as fh:
+            json.dump(kept, fh, indent=2)
+    return removed
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -420,6 +444,10 @@ def main():
         help="Skip (dataset, method) pairs that already have a LoRA result logged.",
     )
     parser.add_argument(
+        "--replace-existing", action="store_true",
+        help="Before training, remove existing rows in lora/all_results.json for planned (dataset, method) runs.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print the planned runs without training anything.",
     )
@@ -429,6 +457,9 @@ def main():
 
     if args.lora_only and args.olora_only:
         print("ERROR: --lora-only and --olora-only are mutually exclusive.")
+        sys.exit(1)
+    if args.skip_existing and args.replace_existing:
+        print("ERROR: --skip-existing and --replace-existing are mutually exclusive.")
         sys.exit(1)
 
     if args.methods:
@@ -481,6 +512,12 @@ def main():
     # ── Execute ───────────────────────────────────────────────────────────────
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    if args.replace_existing:
+        removed = _prune_logged_runs(runs)
+        print(
+            f"Pruned {removed} existing entr{'y' if removed == 1 else 'ies'} "
+            f"from {RESULTS_DIR / 'all_results.json'} for planned runs.\n"
+        )
 
     statuses: list[tuple[str, str, str, float]] = []
     wall_start = time.time()
